@@ -18,7 +18,9 @@
       "Bash(pip --version)",
       "Bash(pip install:*)",
       "Bash(python:*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(del test_source_manager_integration.py)",
+      "Bash(timeout:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

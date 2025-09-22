@@ -21,11 +21,17 @@ from ..data_sources.base import (
     DataSourceError
 )
 from ..config.config_manager import load_config
+from ..memory.memory_manager import MemoryManager, AdaptiveLearningConfig
+from ..quality.quality_manager import QualityManager, QualityManagerConfig
+from ..validation.validation_engine import ValidationEngine
 
 logger = logging.getLogger(__name__)
 
-# Global manager instance (will be initialized on startup)
+# Global manager instances (will be initialized on startup)
 data_manager: Optional[DataSourceManager] = None
+memory_manager: Optional[MemoryManager] = None
+quality_manager: Optional[QualityManager] = None
+validation_engine: Optional[ValidationEngine] = None
 
 
 def get_data_manager() -> DataSourceManager:
@@ -33,6 +39,27 @@ def get_data_manager() -> DataSourceManager:
     if data_manager is None:
         raise HTTPException(status_code=500, detail="Data manager not initialized")
     return data_manager
+
+
+def get_memory_manager() -> MemoryManager:
+    """Dependency to get the memory manager instance"""
+    if memory_manager is None:
+        raise HTTPException(status_code=500, detail="Memory manager not initialized")
+    return memory_manager
+
+
+def get_quality_manager() -> QualityManager:
+    """Dependency to get the quality manager instance"""
+    if quality_manager is None:
+        raise HTTPException(status_code=500, detail="Quality manager not initialized")
+    return quality_manager
+
+
+def get_validation_engine() -> ValidationEngine:
+    """Dependency to get the validation engine instance"""
+    if validation_engine is None:
+        raise HTTPException(status_code=500, detail="Validation engine not initialized")
+    return validation_engine
 
 
 app = FastAPI(
@@ -46,12 +73,42 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the data manager on startup"""
-    global data_manager
+    """Initialize all managers on startup"""
+    global data_manager, memory_manager, quality_manager, validation_engine
 
     # Load configuration
     config = load_config("config.yaml")
     logger.info(f"Loaded configuration for environment: {config.environment}")
+
+    # Initialize validation engine first (needed by others)
+    validation_engine = ValidationEngine()
+    await validation_engine.initialize()
+    logger.info("Validation engine initialized")
+
+    # Initialize memory manager
+    memory_config = AdaptiveLearningConfig(
+        pattern_detection_threshold=0.7,
+        anomaly_detection_threshold=0.3,
+        quality_correlation_threshold=0.6,
+        enable_predictive_scoring=True,
+        enable_source_reputation=True,
+        enable_market_context=True
+    )
+    memory_manager = MemoryManager(memory_config)
+    await memory_manager.initialize_memory_system()
+    logger.info("Memory manager initialized")
+
+    # Initialize quality manager with validation integration
+    quality_config = QualityManagerConfig(
+        enable_auto_assessment=True,
+        assessment_interval_minutes=5.0,
+        critical_quality_threshold=60.0,
+        enable_quality_alerts=True,
+        enable_validation_integration=True
+    )
+    quality_manager = QualityManager(quality_config, validation_engine)
+    await quality_manager.start_quality_management()
+    logger.info("Quality manager initialized and started")
 
     # Configuration for data manager from config file
     manager_config = {
@@ -100,16 +157,35 @@ async def startup_event():
 
     # Start health monitoring
     await data_manager.start_health_monitoring()
-    logger.info("Market Data Agent API started successfully")
+
+    # Set up learning integration - data manager will feed data to memory and quality systems
+    data_manager._memory_manager = memory_manager
+    data_manager._quality_manager = quality_manager
+
+    logger.info("Market Data Agent API started successfully with memory and quality integration")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    global data_manager
+    global data_manager, memory_manager, quality_manager, validation_engine
+
+    # Stop quality management first
+    if quality_manager:
+        await quality_manager.stop_quality_management()
+        logger.info("Quality manager stopped")
+
+    # Clean up memory system
+    if memory_manager:
+        await memory_manager.cleanup_old_memories()
+        logger.info("Memory manager cleaned up")
+
+    # Close data manager
     if data_manager:
         await data_manager.close()
-        logger.info("Market Data Agent API shutdown completed")
+        logger.info("Data manager closed")
+
+    logger.info("Market Data Agent API shutdown completed")
 
 
 @app.get("/")
@@ -177,14 +253,28 @@ async def get_sources(manager: DataSourceManager = Depends(get_data_manager)):
 @app.get("/price/{symbol}")
 async def get_current_price(
     symbol: str = Path(..., description="Stock symbol (e.g., AAPL, GOOGL)"),
-    manager: DataSourceManager = Depends(get_data_manager)
+    manager: DataSourceManager = Depends(get_data_manager),
+    memory_mgr: MemoryManager = Depends(get_memory_manager),
+    quality_mgr: QualityManager = Depends(get_quality_manager)
 ) -> Dict[str, Any]:
-    """Get current price for a symbol"""
+    """Get current price for a symbol with learning integration"""
     try:
         symbol = symbol.upper()
         price = await manager.get_current_price(symbol)
 
-        return {
+        # Learn from the price data in memory system
+        await memory_mgr.learn_from_price_data(symbol, price.source, [price])
+
+        # Get quality prediction from memory system
+        predicted_quality = await memory_mgr.predict_quality_score(symbol, price.source, price)
+
+        # Get source reputation
+        source_reputation = await memory_mgr.get_source_reputation(price.source)
+
+        # Get market context
+        market_context = await memory_mgr.get_market_context(symbol)
+
+        response = {
             "symbol": price.symbol,
             "price": price.price,
             "timestamp": price.timestamp.isoformat(),
@@ -192,8 +282,15 @@ async def get_current_price(
             "bid": price.bid,
             "ask": price.ask,
             "source": price.source,
-            "quality_score": price.quality_score
+            "quality_score": price.quality_score,
+            "learning_insights": {
+                "predicted_quality": predicted_quality,
+                "source_reputation": source_reputation,
+                "market_context": market_context
+            }
         }
+
+        return response
 
     except SymbolNotFoundError:
         raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
@@ -328,6 +425,251 @@ async def get_supported_symbols(
     except Exception as e:
         logger.error(f"Unexpected error getting supported symbols: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/quality/assessment/{symbol}")
+async def get_quality_assessment(
+    symbol: str = Path(..., description="Stock symbol to assess"),
+    source: Optional[str] = Query(None, description="Specific source to assess"),
+    manager: DataSourceManager = Depends(get_data_manager),
+    quality_mgr: QualityManager = Depends(get_quality_manager)
+) -> Dict[str, Any]:
+    """Get quality assessment for a symbol from a specific source or all sources"""
+    try:
+        symbol = symbol.upper()
+
+        if source:
+            # Get current price from specific source
+            price = await manager.get_current_price_from_source(symbol, source)
+
+            # Assess quality
+            score_card = await quality_mgr.assess_data_quality(symbol, source, [price])
+
+            return {
+                "symbol": symbol,
+                "source": source,
+                "assessment": {
+                    "overall_grade": score_card.overall_grade.value,
+                    "overall_score": score_card.overall_score,
+                    "dimension_scores": score_card.dimension_scores,
+                    "total_issues": score_card.total_issues,
+                    "critical_issues": score_card.critical_issues,
+                    "high_issues": score_card.high_issues,
+                    "medium_issues": score_card.medium_issues,
+                    "low_issues": score_card.low_issues,
+                    "priority_recommendations": score_card.priority_recommendations,
+                    "improvement_suggestions": score_card.improvement_suggestions,
+                    "confidence_level": score_card.confidence_level,
+                    "assessment_period": [
+                        score_card.assessment_period[0].isoformat(),
+                        score_card.assessment_period[1].isoformat()
+                    ],
+                    "data_points_analyzed": score_card.data_points_analyzed
+                }
+            }
+        else:
+            # Get assessments from all sources
+            assessments = {}
+            for source_name in manager.sources.keys():
+                try:
+                    if manager._is_source_available(source_name):
+                        price = await manager.get_current_price_from_source(symbol, source_name)
+                        score_card = await quality_mgr.assess_data_quality(symbol, source_name, [price])
+                        assessments[source_name] = {
+                            "overall_grade": score_card.overall_grade.value,
+                            "overall_score": score_card.overall_score,
+                            "total_issues": score_card.total_issues,
+                            "critical_issues": score_card.critical_issues
+                        }
+                except Exception as e:
+                    logger.warning(f"Failed to assess {symbol} from {source_name}: {e}")
+                    assessments[source_name] = {"error": str(e)}
+
+            return {
+                "symbol": symbol,
+                "assessments": assessments,
+                "total_sources_assessed": len(assessments)
+            }
+
+    except SymbolNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Quality assessment failed for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail="Quality assessment failed")
+
+
+@app.get("/quality/report")
+async def get_quality_report(
+    quality_mgr: QualityManager = Depends(get_quality_manager)
+) -> Dict[str, Any]:
+    """Get comprehensive quality report"""
+    try:
+        report = quality_mgr.get_quality_report()
+        return report
+    except Exception as e:
+        logger.error(f"Failed to get quality report: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve quality report")
+
+
+@app.get("/quality/action-plan/{symbol}")
+async def get_action_plan(
+    symbol: str = Path(..., description="Stock symbol"),
+    source: str = Query(..., description="Data source"),
+    quality_mgr: QualityManager = Depends(get_quality_manager)
+) -> Dict[str, Any]:
+    """Get quality action plan for a symbol-source combination"""
+    try:
+        symbol = symbol.upper()
+        action_plan = quality_mgr.get_action_plan(symbol, source)
+
+        if not action_plan:
+            raise HTTPException(status_code=404, detail=f"No action plan found for {symbol} from {source}")
+
+        return {
+            "symbol": action_plan.symbol,
+            "source": action_plan.source,
+            "current_grade": action_plan.current_grade.value,
+            "current_score": action_plan.current_score,
+            "target_score": action_plan.target_score,
+            "priority_level": action_plan.priority_level,
+            "immediate_actions": action_plan.immediate_actions,
+            "short_term_actions": action_plan.short_term_actions,
+            "long_term_actions": action_plan.long_term_actions,
+            "success_criteria": action_plan.success_criteria,
+            "review_date": action_plan.review_date.isoformat(),
+            "estimated_improvement": action_plan.estimated_improvement,
+            "created_date": action_plan.created_date.isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get action plan: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve action plan")
+
+
+@app.get("/memory/report")
+async def get_memory_report(
+    memory_mgr: MemoryManager = Depends(get_memory_manager)
+) -> Dict[str, Any]:
+    """Get comprehensive memory system report"""
+    try:
+        report = memory_mgr.get_memory_report()
+        return report
+    except Exception as e:
+        logger.error(f"Failed to get memory report: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve memory report")
+
+
+@app.get("/memory/context/{symbol}")
+async def get_symbol_context(
+    symbol: str = Path(..., description="Stock symbol"),
+    memory_mgr: MemoryManager = Depends(get_memory_manager)
+) -> Dict[str, Any]:
+    """Get learned context and insights for a symbol"""
+    try:
+        symbol = symbol.upper()
+        context = await memory_mgr.get_market_context(symbol)
+
+        # Get source reputations for this symbol
+        source_reputations = {}
+        for source_name in ["polygon", "alpha_vantage", "iex", "finnhub", "yfinance"]:
+            reputation = await memory_mgr.get_source_reputation(source_name)
+            source_reputations[source_name] = reputation
+
+        return {
+            "symbol": symbol,
+            "market_context": context,
+            "source_reputations": source_reputations,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get symbol context for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve symbol context")
+
+
+@app.get("/memory/health")
+async def get_memory_health(
+    memory_mgr: MemoryManager = Depends(get_memory_manager)
+) -> Dict[str, Any]:
+    """Get memory system health status"""
+    try:
+        health_status = await memory_mgr.get_health_status()
+        return health_status
+    except Exception as e:
+        logger.error(f"Memory health check failed: {e}")
+        raise HTTPException(status_code=500, detail="Memory health check failed")
+
+
+@app.get("/system/comprehensive-health")
+async def comprehensive_health_check(
+    manager: DataSourceManager = Depends(get_data_manager),
+    memory_mgr: MemoryManager = Depends(get_memory_manager),
+    quality_mgr: QualityManager = Depends(get_quality_manager),
+    validation_eng: ValidationEngine = Depends(get_validation_engine)
+) -> Dict[str, Any]:
+    """Comprehensive system health check including all components"""
+    try:
+        # Get individual health statuses
+        data_health = await manager.get_source_health_status()
+        memory_health = await memory_mgr.get_health_status()
+        quality_health = await quality_mgr.health_check()
+        validation_health = await validation_eng.get_health_status()
+
+        # Determine overall system health
+        component_statuses = [
+            memory_health["overall_status"],
+            quality_health["overall_status"],
+            validation_health["overall_health"]
+        ]
+
+        data_healthy = sum(1 for status in data_health.values()
+                          if status.status.value == "healthy") > 0
+
+        overall_healthy = (
+            data_healthy and
+            all(status in ["healthy", "active"] for status in component_statuses)
+        )
+
+        return {
+            "overall_status": "healthy" if overall_healthy else "degraded",
+            "timestamp": datetime.now().isoformat(),
+            "components": {
+                "data_sources": {
+                    "status": "healthy" if data_healthy else "unhealthy",
+                    "healthy_sources": sum(1 for status in data_health.values()
+                                         if status.status.value == "healthy"),
+                    "total_sources": len(data_health)
+                },
+                "memory_system": {
+                    "status": memory_health["overall_status"],
+                    "entities": memory_health["components"]["memory_server"]["entities"],
+                    "relations": memory_health["components"]["memory_server"]["relations"]
+                },
+                "quality_system": {
+                    "status": quality_health["overall_status"],
+                    "components_healthy": sum(1 for comp in quality_health["components"].values()
+                                            if comp.get("status") in ["healthy", "active"])
+                },
+                "validation_system": {
+                    "status": validation_health["overall_health"],
+                    "modes_active": len([m for m in validation_health["validation_modes"].values()
+                                       if m.get("enabled", False)])
+                }
+            },
+            "system_metrics": {
+                "memory_patterns_learned": memory_health["components"]["pattern_learning"]["patterns_learned"],
+                "quality_assessments_managed": quality_health.get("assessments_completed", 0),
+                "validation_checks_performed": validation_health.get("total_validations", 0)
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Comprehensive health check failed: {e}")
+        raise HTTPException(status_code=500, detail="Comprehensive health check failed")
 
 
 @app.exception_handler(Exception)

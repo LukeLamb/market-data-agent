@@ -21,23 +21,27 @@ A sophisticated market data collection and validation system that serves as the 
 ### Installation
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/LukeLamb/market-data-agent.git
 cd market-data-agent
 ```
 
 2. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
 3. Set up environment:
+
 ```bash
 cp .env.example .env
 # Edit .env with your API keys
 ```
 
 4. Run the application:
+
 ```bash
 python main.py
 ```
