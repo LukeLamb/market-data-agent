@@ -24,6 +24,9 @@ from .base import (
 from .yfinance_source import YFinanceSource
 from .alpha_vantage_source import AlphaVantageSource
 from ..validation.data_validator import DataValidator, ValidationResult
+from ..resilience.circuit_breaker import (
+    CircuitBreakerManager, CircuitBreakerConfig, FailureType, RecoveryStrategy
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,11 @@ class DataSourceManager:
         self.sources: Dict[str, BaseDataSource] = {}
         self.source_priorities: Dict[str, SourcePriority] = {}
         self.source_reliability: Dict[str, float] = {}
+
+        # Enhanced circuit breaker system
+        self.circuit_breaker_manager = CircuitBreakerManager()
+
+        # Legacy circuit breaker states (for backward compatibility)
         self.circuit_breaker_states: Dict[str, Dict[str, Any]] = {}
 
         # Configuration
@@ -101,6 +109,24 @@ class DataSourceManager:
         self.sources[name] = source
         self.source_priorities[name] = priority
         self.source_reliability[name] = 1.0  # Start with perfect reliability
+
+        # Create enhanced circuit breaker for this source
+        circuit_config = CircuitBreakerConfig(
+            failure_threshold=self.max_failure_threshold,
+            success_threshold=3,
+            timeout_seconds=self.circuit_breaker_timeout,
+            degraded_threshold=max(2, self.max_failure_threshold // 2),
+            critical_failure_threshold=self.max_failure_threshold * 2,
+            enable_adaptive_thresholds=True,
+            recovery_strategy=self._get_recovery_strategy_for_source(name),
+            enable_performance_monitoring=True,
+            slow_request_threshold_ms=5000.0,  # 5 seconds for market data
+            adaptive_window_minutes=15
+        )
+
+        self.circuit_breaker_manager.get_circuit_breaker(name, circuit_config)
+
+        # Legacy circuit breaker states (for backward compatibility)
         self.circuit_breaker_states[name] = {
             "state": "closed",  # closed, open, half-open
             "failure_count": 0,
@@ -109,6 +135,25 @@ class DataSourceManager:
         }
 
         logger.info(f"Registered data source: {name} (priority: {priority.name})")
+
+    def _get_recovery_strategy_for_source(self, source_name: str) -> RecoveryStrategy:
+        """Get recovery strategy based on source characteristics"""
+        # Different strategies for different source types
+        if "alpha_vantage" in source_name.lower():
+            # Alpha Vantage has strict rate limits, use conservative approach
+            return RecoveryStrategy.EXPONENTIAL_BACKOFF
+        elif "yfinance" in source_name.lower():
+            # YFinance is more tolerant, use adaptive approach
+            return RecoveryStrategy.ADAPTIVE_BACKOFF
+        elif "polygon" in source_name.lower():
+            # Polygon is premium, use performance-based recovery
+            return RecoveryStrategy.PERFORMANCE_BASED
+        elif "iex" in source_name.lower():
+            # IEX is reliable, use linear backoff
+            return RecoveryStrategy.LINEAR_BACKOFF
+        else:
+            # Default to adaptive for unknown sources
+            return RecoveryStrategy.ADAPTIVE_BACKOFF
 
     def register_yfinance_source(self, config: Optional[Dict[str, Any]] = None) -> None:
         """Register YFinance data source
@@ -155,15 +200,22 @@ class DataSourceManager:
                 continue
 
             try:
+                # Use enhanced circuit breaker to execute the request
+                circuit_breaker = self.circuit_breaker_manager.get_circuit_breaker(source_name)
                 source = self.sources[source_name]
-                price = await source.get_current_price(symbol)
+
+                async def fetch_price():
+                    return await source.get_current_price(symbol)
+
+                price = await circuit_breaker.call(fetch_price)
 
                 # Validate if enabled
                 if self.validation_enabled:
                     validation_result = self.validator.validate_current_price(price)
                     if not validation_result.is_valid:
                         logger.warning(f"Invalid price data from {source_name}: {validation_result.issues}")
-                        continue
+                        # Treat validation failure as a recoverable error
+                        raise DataSourceError(f"Data validation failed: {validation_result.issues}")
 
                     # Update quality score from validation
                     price.quality_score = validation_result.quality_score
@@ -180,10 +232,20 @@ class DataSourceManager:
                 logger.debug(f"Symbol {symbol} not found in {source_name}")
                 continue
 
-            except (RateLimitError, DataSourceError) as e:
+            except Exception as e:
+                # Enhanced circuit breaker will have already recorded this failure
                 logger.warning(f"Failed to get current price from {source_name}: {e}")
+
+                # Update legacy systems for compatibility
                 self._update_source_reliability(source_name, False)
-                self._update_circuit_breaker(source_name, e)
+
+                # For symbol not found errors, don't penalize the circuit breaker
+                if isinstance(e, SymbolNotFoundError):
+                    symbol_not_found_count += 1
+                    continue
+                else:
+                    self._update_circuit_breaker(source_name, e)
+
                 last_error = e
                 continue
 
@@ -273,7 +335,7 @@ class DataSourceManager:
             raise NoHealthySourceError("No healthy data sources available")
 
     async def get_source_health_status(self) -> Dict[str, HealthStatus]:
-        """Get health status for all registered sources
+        """Get health status for all registered sources with enhanced circuit breaker info
 
         Returns:
             Dictionary mapping source names to their health status
@@ -282,17 +344,108 @@ class DataSourceManager:
 
         for source_name, source in self.sources.items():
             try:
+                # Get basic health status from source
                 status = await source.get_health_status()
+
+                # Enhance with circuit breaker information
+                try:
+                    circuit_breaker = self.circuit_breaker_manager.get_circuit_breaker(source_name)
+                    cb_health = await circuit_breaker.get_health_status()
+                    cb_stats = circuit_breaker.get_statistics()
+
+                    # Update status based on circuit breaker state
+                    if cb_health["health_status"] == "unhealthy":
+                        status.status = DataSourceStatus.UNHEALTHY
+                    elif cb_health["health_status"] == "degraded":
+                        status.status = DataSourceStatus.DEGRADED
+
+                    # Add circuit breaker metrics to the status
+                    status.error_count = cb_stats["failed_requests"]
+                    status.response_time_ms = cb_stats["performance_metrics"]["avg_response_time_ms"]
+
+                    # Add circuit breaker specific information to message
+                    cb_info = f" | CB: {cb_health['state']} | Success: {cb_stats['performance_metrics']['current_success_rate']:.1%}"
+                    status.message = f"{status.message}{cb_info}" if status.message else f"Circuit Breaker: {cb_health['state']}"
+
+                except Exception as cb_error:
+                    logger.warning(f"Failed to get circuit breaker health for {source_name}: {cb_error}")
+                    # Fallback to legacy circuit breaker data
+                    legacy_cb = self.circuit_breaker_states.get(source_name, {})
+                    status.error_count = legacy_cb.get("failure_count", 0)
+
                 health_statuses[source_name] = status
+
             except Exception as e:
                 # Create a health status indicating failure
+                legacy_cb = self.circuit_breaker_states.get(source_name, {})
                 health_statuses[source_name] = HealthStatus(
                     status=DataSourceStatus.UNHEALTHY,
-                    error_count=self.circuit_breaker_states[source_name]["failure_count"],
+                    error_count=legacy_cb.get("failure_count", 0),
                     message=f"Health check failed: {str(e)}"
                 )
 
         return health_statuses
+
+    def get_circuit_breaker_statistics(self) -> Dict[str, Dict[str, Any]]:
+        """Get comprehensive circuit breaker statistics for all sources
+
+        Returns:
+            Dictionary mapping source names to their circuit breaker statistics
+        """
+        try:
+            return self.circuit_breaker_manager.get_all_statistics()
+        except Exception as e:
+            logger.error(f"Failed to get circuit breaker statistics: {e}")
+            # Fallback to legacy circuit breaker data
+            legacy_stats = {}
+            for source_name, cb_state in self.circuit_breaker_states.items():
+                legacy_stats[source_name] = {
+                    "state": cb_state.get("state", "unknown"),
+                    "failure_count": cb_state.get("failure_count", 0),
+                    "last_failure": cb_state.get("last_failure"),
+                    "next_attempt": cb_state.get("next_attempt")
+                }
+            return legacy_stats
+
+    async def get_circuit_breaker_health_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get health status for all circuit breakers
+
+        Returns:
+            Dictionary mapping source names to their circuit breaker health status
+        """
+        try:
+            return await self.circuit_breaker_manager.get_all_health_status()
+        except Exception as e:
+            logger.error(f"Failed to get circuit breaker health status: {e}")
+            return {}
+
+    def reset_circuit_breaker(self, source_name: str) -> bool:
+        """Reset a specific circuit breaker
+
+        Args:
+            source_name: Name of the source whose circuit breaker to reset
+
+        Returns:
+            True if reset was successful
+        """
+        try:
+            if source_name in self.circuit_breaker_manager.circuit_breakers:
+                circuit_breaker = self.circuit_breaker_manager.get_circuit_breaker(source_name)
+                circuit_breaker.reset()
+                logger.info(f"Circuit breaker reset for {source_name}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to reset circuit breaker for {source_name}: {e}")
+            return False
+
+    def reset_all_circuit_breakers(self):
+        """Reset all circuit breakers"""
+        try:
+            self.circuit_breaker_manager.reset_all()
+            logger.info("All circuit breakers reset")
+        except Exception as e:
+            logger.error(f"Failed to reset all circuit breakers: {e}")
 
     async def validate_symbol(self, symbol: str) -> Dict[str, bool]:
         """Validate symbol across all available sources
@@ -367,14 +520,42 @@ class DataSourceManager:
         if self.source_priorities[source_name] == SourcePriority.DISABLED:
             return False
 
-        circuit_state = self.circuit_breaker_states[source_name]
+        # Use enhanced circuit breaker for availability check
+        try:
+            circuit_breaker = self.circuit_breaker_manager.get_circuit_breaker(source_name)
 
-        if circuit_state["state"] == "open":
-            # Check if we should try half-open
-            if circuit_state["next_attempt"] and datetime.now() >= circuit_state["next_attempt"]:
-                circuit_state["state"] = "half-open"
-                logger.info(f"Circuit breaker for {source_name} moved to half-open state")
+            # Enhanced circuit breaker handles more sophisticated state management
+            from ..resilience.circuit_breaker import CircuitState
+
+            state = circuit_breaker.get_state()
+
+            # Allow requests based on enhanced circuit breaker logic
+            if state == CircuitState.CLOSED:
                 return True
+            elif state == CircuitState.DEGRADED:
+                # Degraded state allows some requests through
+                return True
+            elif state == CircuitState.HALF_OPEN:
+                # Half-open allows limited testing requests
+                return True
+            elif state == CircuitState.ADAPTIVE:
+                # Adaptive state uses performance metrics
+                return True
+            else:  # OPEN state
+                return False
+
+        except Exception as e:
+            logger.warning(f"Error checking circuit breaker for {source_name}: {e}")
+
+            # Fallback to legacy circuit breaker logic
+            circuit_state = self.circuit_breaker_states[source_name]
+
+            if circuit_state["state"] == "open":
+                # Check if we should try half-open
+                if circuit_state["next_attempt"] and datetime.now() >= circuit_state["next_attempt"]:
+                    circuit_state["state"] = "half-open"
+                    logger.info(f"Circuit breaker for {source_name} moved to half-open state")
+                    return True
             return False
 
         return True
