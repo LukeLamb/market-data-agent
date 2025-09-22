@@ -17,7 +17,8 @@
       "Bash(git rm:*)",
       "Bash(pip --version)",
       "Bash(pip install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(pytest:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
