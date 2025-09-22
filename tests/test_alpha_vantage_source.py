@@ -64,10 +64,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             price = await self.source.get_current_price("AAPL")
 
             assert isinstance(price, CurrentPrice)
@@ -92,10 +90,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             with pytest.raises(SymbolNotFoundError):
                 await self.source.get_current_price("INVALID")
 
@@ -114,10 +110,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             with pytest.raises(RateLimitError):
                 await self.source.get_current_price("AAPL")
 
@@ -153,13 +147,11 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
         start_date = date(2023, 1, 1)
         end_date = date(2023, 1, 31)
 
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             data = await self.source.get_historical_data("AAPL", start_date, end_date)
 
             assert len(data) == 2
@@ -186,10 +178,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             with pytest.raises(DataSourceError):
                 await self.source.get_historical_data(
                     "AAPL",
@@ -215,10 +205,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             status = await self.source.get_health_status()
 
             assert isinstance(status, HealthStatus)
@@ -241,10 +229,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             status = await self.source.get_health_status()
 
             assert isinstance(status, HealthStatus)
@@ -265,10 +251,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             status = await self.source.get_health_status()
 
             assert isinstance(status, HealthStatus)
@@ -302,10 +286,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             is_valid = await self.source.validate_symbol("AAPL")
             assert is_valid is True
 
@@ -324,10 +306,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             is_valid = await self.source.validate_symbol("INVALID")
             assert is_valid is False
 
@@ -377,10 +357,8 @@ class TestAlphaVantageSource:
         mock_context_manager.__aenter__.return_value = mock_response
         mock_context_manager.__aexit__.return_value = None
 
-        mock_session = AsyncMock()
-        mock_session.get.return_value = mock_context_manager
-
-        with patch.object(self.source, '_get_session', new_callable=AsyncMock, return_value=mock_session):
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value = mock_context_manager
             with pytest.raises(DataSourceError):
                 await self.source.get_current_price("AAPL")
 
