@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from datetime import date, datetime
 from typing import Dict, List, Optional, Any
 import logging
+import os
 
 from ..data_sources.source_manager import DataSourceManager, SourcePriority
 from ..data_sources.base import (
@@ -19,6 +20,7 @@ from ..data_sources.base import (
     RateLimitError,
     DataSourceError
 )
+from ..config.config_manager import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -47,34 +49,54 @@ async def startup_event():
     """Initialize the data manager on startup"""
     global data_manager
 
-    # Configuration for data manager
-    config = {
-        "max_failure_threshold": 5,
-        "circuit_breaker_timeout": 300,  # 5 minutes
-        "health_check_interval": 60,     # 1 minute
-        "validation_enabled": True
+    # Load configuration
+    config = load_config("config.yaml")
+    logger.info(f"Loaded configuration for environment: {config.environment}")
+
+    # Configuration for data manager from config file
+    manager_config = {
+        "max_failure_threshold": config.source_manager.max_failure_threshold,
+        "circuit_breaker_timeout": config.source_manager.circuit_breaker_timeout,
+        "health_check_interval": config.source_manager.health_check_interval,
+        "validation_enabled": config.source_manager.validation_enabled,
+        "validation": {
+            "max_price_change_percent": config.validation.max_price_change_percent,
+            "min_volume": config.validation.min_volume,
+            "min_price": config.validation.min_price,
+            "max_price": config.validation.max_price
+        }
     }
 
-    data_manager = DataSourceManager(config)
+    data_manager = DataSourceManager(manager_config)
 
-    # Register data sources
-    yf_config = {"priority": SourcePriority.PRIMARY.value}
-    data_manager.register_yfinance_source(yf_config)
+    # Register YFinance source if enabled
+    if config.yfinance.enabled:
+        yf_config = {
+            "priority": config.yfinance.priority,
+            "rate_limit_requests": config.yfinance.rate_limit_requests,
+            "rate_limit_period": config.yfinance.rate_limit_period,
+            "timeout": config.yfinance.timeout,
+            "max_retries": config.yfinance.max_retries
+        }
+        data_manager.register_yfinance_source(yf_config)
+        logger.info("Registered YFinance source")
 
-    # Add Alpha Vantage if API key is available
-    try:
-        import os
-        if os.getenv("ALPHA_VANTAGE_API_KEY"):
+    # Register Alpha Vantage source if enabled and API key is available
+    if config.alpha_vantage.enabled:
+        api_key = config.alpha_vantage.api_key or os.getenv("ALPHA_VANTAGE_API_KEY")
+        if api_key:
             av_config = {
-                "api_key": os.getenv("ALPHA_VANTAGE_API_KEY"),
-                "priority": SourcePriority.SECONDARY.value
+                "api_key": api_key,
+                "priority": config.alpha_vantage.priority,
+                "rate_limit_requests": config.alpha_vantage.rate_limit_requests,
+                "rate_limit_period": config.alpha_vantage.rate_limit_period,
+                "timeout": config.alpha_vantage.timeout,
+                "max_retries": config.alpha_vantage.max_retries
             }
             data_manager.register_alpha_vantage_source(av_config)
             logger.info("Registered Alpha Vantage source with API key")
         else:
-            logger.info("No Alpha Vantage API key found, using YFinance only")
-    except Exception as e:
-        logger.warning(f"Failed to register Alpha Vantage source: {e}")
+            logger.info("Alpha Vantage enabled but no API key found, skipping registration")
 
     # Start health monitoring
     await data_manager.start_health_monitoring()
