@@ -1,0 +1,3 @@
+{"type":"entity","name":"market_data_agent","entityType":"project","observations":["A project for market data analysis and trading agent development","GitHub repository created at https://github.com/LukeLamb/market-data-agent.git","Phase 1 foundation plan documented in docs/phase1-foundation.md","Ready to begin implementation of foundational market data agent components","User has reviewed and approved Phase 1 implementation steps"]}
+{"type":"entity","name":"LukeLamb","entityType":"user","observations":["GitHub username: LukeLamb","Working on market data agent project","Created repository https://github.com/LukeLamb/market-data-agent.git"]}
+{"type":"relation","from":"LukeLamb","to":"market_data_agent","relationType":"owns"}
