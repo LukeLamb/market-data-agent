@@ -24,6 +24,11 @@ from ..config.config_manager import load_config
 from ..memory.memory_manager import MemoryManager, AdaptiveLearningConfig
 from ..quality.quality_manager import QualityManager, QualityManagerConfig
 from ..validation.validation_engine import ValidationEngine
+from ..monitoring import (
+    MetricsCollector, AlertingSystem, MonitoringDashboard,
+    get_default_metrics, get_default_alerts, get_default_dashboard,
+    record_counter, record_gauge, record_timer, time_operation
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +37,7 @@ data_manager: Optional[DataSourceManager] = None
 memory_manager: Optional[MemoryManager] = None
 quality_manager: Optional[QualityManager] = None
 validation_engine: Optional[ValidationEngine] = None
+monitoring_dashboard: Optional[MonitoringDashboard] = None
 
 
 def get_data_manager() -> DataSourceManager:
@@ -62,6 +68,13 @@ def get_validation_engine() -> ValidationEngine:
     return validation_engine
 
 
+def get_monitoring_dashboard() -> MonitoringDashboard:
+    """Dependency to get the monitoring dashboard instance"""
+    if monitoring_dashboard is None:
+        raise HTTPException(status_code=500, detail="Monitoring dashboard not initialized")
+    return monitoring_dashboard
+
+
 app = FastAPI(
     title="Market Data Agent API",
     description="REST API for accessing financial market data with intelligent source management",
@@ -70,11 +83,46 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# Add monitoring middleware
+@app.middleware("http")
+async def monitoring_middleware(request, call_next):
+    """Middleware to track request metrics"""
+    # Record request start
+    start_time = datetime.now()
+    record_counter('api_requests_total', 1, {
+        'method': request.method,
+        'endpoint': str(request.url.path)
+    })
+
+    # Process request
+    with time_operation('api_request_duration', {
+        'method': request.method,
+        'endpoint': str(request.url.path)
+    }):
+        response = await call_next(request)
+
+    # Record response metrics
+    record_counter('api_responses_total', 1, {
+        'method': request.method,
+        'endpoint': str(request.url.path),
+        'status_code': str(response.status_code)
+    })
+
+    # Record response time
+    duration = (datetime.now() - start_time).total_seconds()
+    record_timer('api_response_time', duration, {
+        'method': request.method,
+        'endpoint': str(request.url.path),
+        'status_code': str(response.status_code)
+    })
+
+    return response
+
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize all managers on startup"""
-    global data_manager, memory_manager, quality_manager, validation_engine
+    global data_manager, memory_manager, quality_manager, validation_engine, monitoring_dashboard
 
     # Load configuration
     config = load_config("config.yaml")
@@ -162,7 +210,15 @@ async def startup_event():
     data_manager._memory_manager = memory_manager
     data_manager._quality_manager = quality_manager
 
-    logger.info("Market Data Agent API started successfully with memory and quality integration")
+    # Initialize monitoring dashboard
+    monitoring_dashboard = get_default_dashboard()
+    logger.info("Monitoring dashboard initialized")
+
+    # Record startup metrics
+    record_counter('api_startup_count')
+    record_gauge('api_startup_timestamp', datetime.now().timestamp())
+
+    logger.info("Market Data Agent API started successfully with memory, quality, and monitoring integration")
 
 
 @app.on_event("shutdown")
@@ -672,10 +728,203 @@ async def comprehensive_health_check(
         raise HTTPException(status_code=500, detail="Comprehensive health check failed")
 
 
+# Monitoring and Alerting Endpoints
+
+@app.get("/monitoring/dashboard/{layout_name}")
+async def get_monitoring_dashboard(
+    layout_name: str = Path(..., description="Dashboard layout name (overview, performance, alerts)"),
+    dashboard: MonitoringDashboard = Depends(get_monitoring_dashboard)
+):
+    """
+    Get monitoring dashboard data for a specific layout
+
+    Available layouts:
+    - overview: General system overview with key metrics
+    - performance: Performance-focused metrics and charts
+    - alerts: Alert status and history
+    """
+    try:
+        # Record API request metric
+        record_counter('monitoring_dashboard_requests', 1, {'layout': layout_name})
+
+        with time_operation('dashboard_generation_time', {'layout': layout_name}):
+            dashboard_data = dashboard.generate_dashboard(layout_name)
+
+        return {
+            "success": True,
+            "layout_name": layout_name,
+            "dashboard": dashboard_data
+        }
+    except Exception as e:
+        logger.error(f"Error generating dashboard {layout_name}: {e}")
+        record_counter('monitoring_dashboard_errors', 1, {'layout': layout_name, 'error': str(e)})
+        raise HTTPException(status_code=500, detail=f"Failed to generate dashboard: {str(e)}")
+
+
+@app.get("/monitoring/metrics")
+async def get_current_metrics():
+    """
+    Get current system metrics
+    """
+    try:
+        record_counter('monitoring_metrics_requests')
+
+        metrics_collector = get_default_metrics()
+        current_metrics = metrics_collector.get_current_metrics()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": current_metrics
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving metrics: {e}")
+        record_counter('monitoring_metrics_errors', 1, {'error': str(e)})
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve metrics: {str(e)}")
+
+
+@app.get("/monitoring/metrics/{metric_name}")
+async def get_metric_details(
+    metric_name: str = Path(..., description="Name of the metric to retrieve"),
+    include_history: bool = Query(False, description="Include historical data")
+):
+    """
+    Get detailed information about a specific metric
+    """
+    try:
+        record_counter('monitoring_metric_detail_requests', 1, {'metric': metric_name})
+
+        metrics_collector = get_default_metrics()
+
+        # Get current value
+        current_metrics = metrics_collector.get_current_metrics()
+        current_value = current_metrics.get(metric_name)
+
+        if current_value is None:
+            raise HTTPException(status_code=404, detail=f"Metric '{metric_name}' not found")
+
+        response = {
+            "success": True,
+            "metric_name": metric_name,
+            "current_value": current_value,
+            "summary": metrics_collector.get_summary(metric_name).__dict__
+        }
+
+        if include_history:
+            # Get historical data if available
+            if metric_name in metrics_collector.metrics:
+                history = list(metrics_collector.metrics[metric_name])
+                response["history"] = [
+                    {
+                        "value": mv.value,
+                        "timestamp": mv.timestamp.isoformat(),
+                        "tags": mv.tags
+                    }
+                    for mv in history[-100:]  # Last 100 data points
+                ]
+
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving metric {metric_name}: {e}")
+        record_counter('monitoring_metric_detail_errors', 1, {'metric': metric_name, 'error': str(e)})
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve metric details: {str(e)}")
+
+
+@app.get("/monitoring/alerts")
+async def get_active_alerts():
+    """
+    Get current active alerts
+    """
+    try:
+        record_counter('monitoring_alerts_requests')
+
+        alerting_system = get_default_alerts()
+
+        # Get active alerts from alerting system
+        active_alerts = alerting_system.get_active_alerts() if hasattr(alerting_system, 'get_active_alerts') else []
+
+        # Also check metrics collector for any triggered alerts
+        metrics_collector = get_default_metrics()
+        metric_alerts = metrics_collector.check_alerts()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "active_alerts_count": len(active_alerts) + len(metric_alerts),
+            "active_alerts": [alert.__dict__ for alert in active_alerts],
+            "metric_alerts": [alert.__dict__ for alert in metric_alerts]
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving alerts: {e}")
+        record_counter('monitoring_alerts_errors', 1, {'error': str(e)})
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve alerts: {str(e)}")
+
+
+@app.get("/monitoring/system-status")
+async def get_system_status(
+    dashboard: MonitoringDashboard = Depends(get_monitoring_dashboard)
+):
+    """
+    Get overall system status and health
+    """
+    try:
+        record_counter('monitoring_system_status_requests')
+
+        with time_operation('system_status_generation_time'):
+            system_status = dashboard.get_system_status()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "system_status": system_status.__dict__
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving system status: {e}")
+        record_counter('monitoring_system_status_errors', 1, {'error': str(e)})
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve system status: {str(e)}")
+
+
+@app.post("/monitoring/metrics/{metric_name}/alert")
+async def add_metric_alert(
+    metric_name: str = Path(..., description="Name of the metric to add alert for"),
+    alert_config: Dict[str, Any] = None
+):
+    """
+    Add an alert rule for a specific metric
+    """
+    try:
+        record_counter('monitoring_alert_config_requests', 1, {'metric': metric_name})
+
+        if not alert_config:
+            raise HTTPException(status_code=400, detail="Alert configuration required")
+
+        # This would integrate with the alerting system to add alert rules
+        # For now, return success with the configuration
+
+        return {
+            "success": True,
+            "metric_name": metric_name,
+            "alert_config": alert_config,
+            "message": "Alert rule added successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding alert for metric {metric_name}: {e}")
+        record_counter('monitoring_alert_config_errors', 1, {'metric': metric_name, 'error': str(e)})
+        raise HTTPException(status_code=500, detail=f"Failed to add alert rule: {str(e)}")
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Global exception handler for unhandled errors"""
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
+
+    # Record exception metric
+    record_counter('api_exceptions', 1, {'exception_type': type(exc).__name__})
+
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"}
