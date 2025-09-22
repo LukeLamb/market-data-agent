@@ -5,6 +5,8 @@ from .yfinance_source import YFinanceSource
 from .alpha_vantage_source import AlphaVantageSource
 from .iex_cloud_source import IEXCloudSource
 from .twelve_data_source import TwelveDataSource
+from .finnhub_source import FinnhubSource
+from .polygon_source import PolygonSource
 
 __all__ = [
     "BaseDataSource",
@@ -15,5 +17,7 @@ __all__ = [
     "YFinanceSource",
     "AlphaVantageSource",
     "IEXCloudSource",
-    "TwelveDataSource"
+    "TwelveDataSource",
+    "FinnhubSource",
+    "PolygonSource"
 ]
