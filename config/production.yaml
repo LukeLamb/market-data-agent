@@ -1,0 +1,76 @@
+# Production Environment Configuration
+# Optimized for production deployment
+
+# Global settings
+debug: false
+
+# API settings - optimized for production
+api:
+  reload: false
+  workers: 4  # Multiple workers for production
+  log_level: "info"
+  cors_enabled: true
+  cors_origins: ["https://yourdomain.com"]  # Restrict to production domain
+
+# Database settings - use production database
+database:
+  url: "postgresql://user:password@localhost:5432/market_data_prod"
+  echo: false  # Disable SQL logging in production
+  pool_size: 20
+  max_overflow: 30
+  pool_timeout: 60
+
+# Logging settings - structured for production
+logging:
+  level: "INFO"
+  file_enabled: true
+  file_path: "/var/log/market_data_agent/market_data_agent.log"
+  max_file_size: 52428800  # 50MB
+  backup_count: 10
+
+# Data source settings - production limits
+yfinance:
+  rate_limit_requests: 120
+  timeout: 30
+  cache_ttl: 600  # 10 minutes cache in production
+
+alpha_vantage:
+  rate_limit_requests: 500
+  timeout: 30
+  cache_ttl: 600
+
+# Source manager settings - robust for production
+source_manager:
+  max_failure_threshold: 10
+  circuit_breaker_timeout: 600  # 10 minutes
+  health_check_interval: 120    # 2 minutes
+
+# Validation settings - strict for production
+validation:
+  max_price_change_percent: 25.0  # Stricter validation
+  quality_threshold: 80  # Higher quality threshold
+
+# Performance settings - optimized for production
+performance:
+  cache_size: 10000
+  cache_ttl: 900  # 15 minutes
+  batch_size: 200
+  profiling_enabled: false  # Disable profiling overhead in production
+  background_cleanup_interval: 300  # 5 minutes
+
+# Security settings
+security:
+  rate_limiting_enabled: true
+  max_requests_per_minute: 100
+  require_api_key: true
+  cors_max_age: 86400  # 24 hours
+
+# Monitoring settings
+monitoring:
+  metrics_enabled: true
+  health_check_endpoint: true
+  prometheus_enabled: true
+  alert_thresholds:
+    error_rate_percent: 5.0
+    response_time_ms: 1000
+    availability_percent: 99.0

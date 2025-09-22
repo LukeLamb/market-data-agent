@@ -1,0 +1,75 @@
+# Staging Environment Configuration
+# Production-like settings for testing
+
+# Global settings
+debug: false
+
+# API settings - similar to production but with more logging
+api:
+  reload: false
+  workers: 2
+  log_level: "info"
+  cors_enabled: true
+  cors_origins: ["https://staging.yourdomain.com", "http://localhost:3000"]
+
+# Database settings - staging database
+database:
+  url: "postgresql://user:password@localhost:5432/market_data_staging"
+  echo: false
+  pool_size: 10
+  max_overflow: 15
+  pool_timeout: 45
+
+# Logging settings - comprehensive for staging testing
+logging:
+  level: "INFO"
+  file_enabled: true
+  file_path: "logs/staging_market_data_agent.log"
+  max_file_size: 20971520  # 20MB
+  backup_count: 5
+
+# Data source settings - moderate limits for staging
+yfinance:
+  rate_limit_requests: 150
+  timeout: 25
+  cache_ttl: 450  # 7.5 minutes
+
+alpha_vantage:
+  rate_limit_requests: 300
+  timeout: 25
+  cache_ttl: 450
+
+# Source manager settings - balanced for staging
+source_manager:
+  max_failure_threshold: 7
+  circuit_breaker_timeout: 300  # 5 minutes
+  health_check_interval: 90     # 1.5 minutes
+
+# Validation settings - moderately strict
+validation:
+  max_price_change_percent: 35.0
+  quality_threshold: 75
+
+# Performance settings - staging optimized
+performance:
+  cache_size: 5000
+  cache_ttl: 600  # 10 minutes
+  batch_size: 150
+  profiling_enabled: true  # Keep profiling in staging
+  background_cleanup_interval: 240  # 4 minutes
+
+# Security settings
+security:
+  rate_limiting_enabled: true
+  max_requests_per_minute: 150
+  require_api_key: false  # Disabled for easier staging testing
+
+# Monitoring settings
+monitoring:
+  metrics_enabled: true
+  health_check_endpoint: true
+  prometheus_enabled: true
+  alert_thresholds:
+    error_rate_percent: 10.0
+    response_time_ms: 1500
+    availability_percent: 98.0

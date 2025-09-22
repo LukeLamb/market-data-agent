@@ -29,6 +29,11 @@ from ..monitoring import (
     get_default_metrics, get_default_alerts, get_default_dashboard,
     record_counter, record_gauge, record_timer, time_operation
 )
+from ..performance import (
+    IntelligentCache, RequestBatcher, PerformanceProfiler,
+    get_default_cache, get_default_batcher, get_default_profiler,
+    cache_get, cache_set, start_profiling
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,9 @@ memory_manager: Optional[MemoryManager] = None
 quality_manager: Optional[QualityManager] = None
 validation_engine: Optional[ValidationEngine] = None
 monitoring_dashboard: Optional[MonitoringDashboard] = None
+performance_cache: Optional[IntelligentCache] = None
+request_batcher: Optional[RequestBatcher] = None
+performance_profiler: Optional[PerformanceProfiler] = None
 
 
 def get_data_manager() -> DataSourceManager:
@@ -122,7 +130,7 @@ async def monitoring_middleware(request, call_next):
 @app.on_event("startup")
 async def startup_event():
     """Initialize all managers on startup"""
-    global data_manager, memory_manager, quality_manager, validation_engine, monitoring_dashboard
+    global data_manager, memory_manager, quality_manager, validation_engine, monitoring_dashboard, performance_cache, request_batcher, performance_profiler
 
     # Load configuration
     config = load_config("config.yaml")
@@ -214,17 +222,28 @@ async def startup_event():
     monitoring_dashboard = get_default_dashboard()
     logger.info("Monitoring dashboard initialized")
 
+    # Initialize performance optimization components
+    performance_cache = get_default_cache()
+    request_batcher = get_default_batcher()
+    performance_profiler = get_default_profiler()
+
+    # Start performance components
+    await performance_cache.start()
+    await request_batcher.start()
+    await performance_profiler.start()
+    logger.info("Performance optimization components initialized")
+
     # Record startup metrics
     record_counter('api_startup_count')
     record_gauge('api_startup_timestamp', datetime.now().timestamp())
 
-    logger.info("Market Data Agent API started successfully with memory, quality, and monitoring integration")
+    logger.info("Market Data Agent API started successfully with memory, quality, monitoring, and performance optimization")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    global data_manager, memory_manager, quality_manager, validation_engine
+    global data_manager, memory_manager, quality_manager, validation_engine, performance_cache, request_batcher, performance_profiler
 
     # Stop quality management first
     if quality_manager:
@@ -235,6 +254,19 @@ async def shutdown_event():
     if memory_manager:
         await memory_manager.cleanup_old_memories()
         logger.info("Memory manager cleaned up")
+
+    # Stop performance components
+    if performance_profiler:
+        await performance_profiler.stop()
+        logger.info("Performance profiler stopped")
+
+    if request_batcher:
+        await request_batcher.stop()
+        logger.info("Request batcher stopped")
+
+    if performance_cache:
+        await performance_cache.stop()
+        logger.info("Performance cache stopped")
 
     # Close data manager
     if data_manager:
@@ -313,10 +345,27 @@ async def get_current_price(
     memory_mgr: MemoryManager = Depends(get_memory_manager),
     quality_mgr: QualityManager = Depends(get_quality_manager)
 ) -> Dict[str, Any]:
-    """Get current price for a symbol with learning integration"""
+    """Get current price for a symbol with intelligent caching and learning integration"""
     try:
         symbol = symbol.upper()
-        price = await manager.get_current_price(symbol)
+
+        # Start performance profiling
+        with start_profiling(f"current_price_{symbol}"):
+            # Check cache first for sub-100ms response
+            cache_key = f"current_price:{symbol}"
+            cached_result = cache_get(cache_key)
+
+            if cached_result is not None:
+                record_counter('cache_hits', 1, {'operation': 'current_price', 'symbol': symbol})
+                record_gauge('response_source', 1, {'source': 'cache'})  # 1 = cache
+                cached_result['cached'] = True
+                return cached_result
+
+            # Cache miss - fetch from data sources
+            record_counter('cache_misses', 1, {'operation': 'current_price', 'symbol': symbol})
+            record_gauge('response_source', 0, {'source': 'api'})  # 0 = api
+
+            price = await manager.get_current_price(symbol)
 
         # Learn from the price data in memory system
         await memory_mgr.learn_from_price_data(symbol, price.source, [price])
@@ -331,22 +380,26 @@ async def get_current_price(
         market_context = await memory_mgr.get_market_context(symbol)
 
         response = {
-            "symbol": price.symbol,
-            "price": price.price,
-            "timestamp": price.timestamp.isoformat(),
-            "volume": price.volume,
-            "bid": price.bid,
-            "ask": price.ask,
-            "source": price.source,
-            "quality_score": price.quality_score,
-            "learning_insights": {
-                "predicted_quality": predicted_quality,
-                "source_reputation": source_reputation,
-                "market_context": market_context
+                "symbol": price.symbol,
+                "price": price.price,
+                "timestamp": price.timestamp.isoformat(),
+                "volume": price.volume,
+                "bid": price.bid,
+                "ask": price.ask,
+                "source": price.source,
+                "quality_score": price.quality_score,
+                "cached": False,
+                "learning_insights": {
+                    "predicted_quality": predicted_quality,
+                    "source_reputation": source_reputation,
+                    "market_context": market_context
+                }
             }
-        }
 
-        return response
+            # Cache for 30 seconds (real-time data with learning insights)
+            cache_set(cache_key, response, ttl=30)
+
+            return response
 
     except SymbolNotFoundError:
         raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
@@ -915,6 +968,127 @@ async def add_metric_alert(
         logger.error(f"Error adding alert for metric {metric_name}: {e}")
         record_counter('monitoring_alert_config_errors', 1, {'metric': metric_name, 'error': str(e)})
         raise HTTPException(status_code=500, detail=f"Failed to add alert rule: {str(e)}")
+
+
+# Performance Optimization Endpoints
+
+@app.get("/performance/cache/stats")
+async def get_cache_stats():
+    """Get intelligent cache statistics"""
+    try:
+        record_counter('performance_cache_stats_requests')
+
+        cache = get_default_cache()
+        stats = cache.get_stats()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "cache_stats": {
+                "hits": stats.hits,
+                "misses": stats.misses,
+                "hit_rate": stats.hit_rate,
+                "total_entries": stats.total_entries,
+                "total_size_bytes": stats.total_size_bytes,
+                "memory_usage_mb": stats.memory_usage_mb,
+                "average_access_time_ms": stats.average_access_time_ms,
+                "evictions": stats.evictions
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving cache stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve cache statistics: {str(e)}")
+
+
+@app.get("/performance/profiler/stats")
+async def get_profiler_stats():
+    """Get performance profiler statistics"""
+    try:
+        record_counter('performance_profiler_stats_requests')
+
+        profiler = get_default_profiler()
+        system_perf = profiler.get_system_performance()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "performance_stats": system_perf
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving profiler stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve profiler statistics: {str(e)}")
+
+
+@app.get("/performance/profiler/bottlenecks")
+async def get_performance_bottlenecks():
+    """Get current performance bottlenecks"""
+    try:
+        record_counter('performance_bottlenecks_requests')
+
+        profiler = get_default_profiler()
+        bottlenecks = profiler.get_bottlenecks()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "bottlenecks_count": len(bottlenecks),
+            "bottlenecks": bottlenecks
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving bottlenecks: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve bottlenecks: {str(e)}")
+
+
+@app.get("/performance/batcher/status")
+async def get_batcher_status():
+    """Get request batcher status"""
+    try:
+        record_counter('performance_batcher_status_requests')
+
+        batcher = get_default_batcher()
+        status = batcher.get_queue_status()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "batcher_status": status
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving batcher status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve batcher status: {str(e)}")
+
+
+@app.post("/performance/cache/clear")
+async def clear_cache(
+    namespace: Optional[str] = Query(None, description="Clear specific namespace"),
+    confirm: bool = Query(False, description="Confirmation flag")
+):
+    """Clear intelligent cache"""
+    try:
+        if not confirm:
+            raise HTTPException(status_code=400, detail="Must set confirm=true to clear cache")
+
+        record_counter('performance_cache_clear_requests', 1, {'namespace': namespace or 'all'})
+
+        cache = get_default_cache()
+
+        if namespace:
+            cache.clear(namespace=namespace)
+            message = f"Cache cleared for namespace: {namespace}"
+        else:
+            cache.clear()
+            message = "All cache cleared"
+
+        return {
+            "success": True,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")
 
 
 @app.exception_handler(Exception)

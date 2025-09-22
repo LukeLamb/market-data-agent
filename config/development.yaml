@@ -1,0 +1,49 @@
+# Development Environment Configuration
+# Overrides for development environment
+
+# Global settings
+debug: true
+
+# API settings - more verbose for development
+api:
+  reload: true
+  log_level: "debug"
+  cors_enabled: true
+  cors_origins: ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+# Database settings - use local SQLite
+database:
+  url: "sqlite:///dev_market_data.db"
+  echo: true  # Show SQL queries in development
+
+# Logging settings - more verbose for development
+logging:
+  level: "DEBUG"
+  file_enabled: true
+  file_path: "logs/dev_market_data_agent.log"
+
+# Data source settings - relaxed for development
+yfinance:
+  rate_limit_requests: 200  # Higher limit for development
+  timeout: 10  # Shorter timeout for faster feedback
+
+alpha_vantage:
+  rate_limit_requests: 100  # Reduced for development (free tier)
+
+# Source manager settings - faster recovery for development
+source_manager:
+  max_failure_threshold: 3
+  circuit_breaker_timeout: 60  # 1 minute
+  health_check_interval: 30    # 30 seconds
+
+# Validation settings - relaxed for development
+validation:
+  max_price_change_percent: 100.0  # Allow larger changes in dev
+  quality_threshold: 60  # Lower threshold for development
+
+# Performance settings
+performance:
+  cache_size: 1000
+  cache_ttl: 300  # 5 minutes
+  batch_size: 50
+  profiling_enabled: true
