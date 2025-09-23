@@ -1,0 +1,596 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capacity-planning
+  labels:
+    name: capacity-planning
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: capacity-planning-config
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+data:
+  config.yaml: |
+    # Capacity Planning Configuration for Market Data Agent
+
+    capacity_planning:
+      # Prediction models and algorithms
+      prediction_models:
+        cpu_usage:
+          algorithm: "linear_regression"
+          features: ["historical_cpu", "request_rate", "time_of_day", "day_of_week"]
+          window_size: "30d"
+          prediction_horizon: "7d"
+          confidence_threshold: 0.8
+
+        memory_usage:
+          algorithm: "polynomial_regression"
+          features: ["historical_memory", "data_volume", "concurrent_users"]
+          window_size: "14d"
+          prediction_horizon: "7d"
+          confidence_threshold: 0.75
+
+        request_volume:
+          algorithm: "arima"
+          seasonality: true
+          seasonal_periods: [24, 168]  # Daily and weekly patterns
+          window_size: "60d"
+          prediction_horizon: "14d"
+          confidence_threshold: 0.85
+
+        storage_growth:
+          algorithm: "exponential_smoothing"
+          features: ["data_ingestion_rate", "retention_policy", "compression_ratio"]
+          window_size: "90d"
+          prediction_horizon: "30d"
+          confidence_threshold: 0.7
+
+      # Resource thresholds for scaling decisions
+      scaling_thresholds:
+        cpu:
+          scale_up: 70
+          scale_down: 30
+          buffer: 20  # Additional capacity buffer
+          max_usage: 80
+
+        memory:
+          scale_up: 75
+          scale_down: 25
+          buffer: 25
+          max_usage: 85
+
+        storage:
+          scale_up: 80
+          scale_down: 40
+          buffer: 30
+          max_usage: 90
+
+        network:
+          scale_up: 60
+          scale_down: 20
+          buffer: 40
+          max_usage: 80
+
+      # Service-specific capacity requirements
+      services:
+        market_data_agent:
+          cpu_per_request: "0.001"  # CPU cores per request
+          memory_per_request: "2Mi"  # Memory per request
+          storage_per_day: "100Mi"   # Storage growth per day
+          peak_multiplier: 2.5       # Peak vs average load
+
+        analytics_agent:
+          cpu_per_computation: "0.1"  # CPU cores per analytics job
+          memory_per_computation: "100Mi"
+          storage_per_computation: "10Mi"
+          peak_multiplier: 3.0
+
+        api_gateway:
+          cpu_per_rps: "0.0005"  # CPU cores per request per second
+          memory_per_connection: "1Mi"
+          connection_limit: 10000
+          peak_multiplier: 2.0
+
+        database:
+          cpu_per_query: "0.002"
+          memory_per_connection: "5Mi"
+          storage_growth_rate: "500Mi/day"
+          peak_multiplier: 1.8
+
+        redis_cache:
+          memory_per_key: "1Ki"
+          cpu_per_operation: "0.0001"
+          eviction_threshold: 0.8
+          peak_multiplier: 1.5
+
+      # Cost optimization parameters
+      cost_optimization:
+        instance_types:
+          - name: "t3.micro"
+            cpu: 2
+            memory: 1024
+            cost_per_hour: 0.0104
+            use_case: "development"
+
+          - name: "t3.small"
+            cpu: 2
+            memory: 2048
+            cost_per_hour: 0.0208
+            use_case: "light_workloads"
+
+          - name: "t3.medium"
+            cpu: 2
+            memory: 4096
+            cost_per_hour: 0.0416
+            use_case: "moderate_workloads"
+
+          - name: "t3.large"
+            cpu: 2
+            memory: 8192
+            cost_per_hour: 0.0832
+            use_case: "standard_workloads"
+
+          - name: "c5.large"
+            cpu: 2
+            memory: 4096
+            cost_per_hour: 0.085
+            use_case: "cpu_intensive"
+
+          - name: "r5.large"
+            cpu: 2
+            memory: 16384
+            cost_per_hour: 0.126
+            use_case: "memory_intensive"
+
+        spot_instances:
+          enabled: true
+          max_interruption_rate: 0.1
+          cost_savings_threshold: 0.3
+          suitable_workloads: ["analytics", "batch_processing"]
+
+        reserved_instances:
+          planning_horizon: "1y"
+          utilization_threshold: 0.8
+          cost_savings_threshold: 0.2
+
+      # Monitoring and alerting
+      monitoring:
+        metrics_collection:
+          interval: "1m"
+          retention: "365d"
+
+        alerts:
+          capacity_warning:
+            cpu_threshold: 60
+            memory_threshold: 65
+            storage_threshold: 70
+            duration: "10m"
+
+          capacity_critical:
+            cpu_threshold: 80
+            memory_threshold: 85
+            storage_threshold: 90
+            duration: "5m"
+
+          prediction_confidence_low:
+            threshold: 0.6
+            duration: "1h"
+
+        dashboards:
+          - name: "Capacity Overview"
+            refresh: "30s"
+            panels: ["current_usage", "predictions", "recommendations"]
+
+          - name: "Cost Analysis"
+            refresh: "1h"
+            panels: ["cost_trends", "optimization_opportunities", "budget_tracking"]
+
+    # Machine learning configuration
+    ml_config:
+      data_sources:
+        prometheus:
+          url: "http://prometheus.monitoring.svc.cluster.local:9090"
+          metrics:
+            - "container_cpu_usage_seconds_total"
+            - "container_memory_usage_bytes"
+            - "container_network_receive_bytes_total"
+            - "container_network_transmit_bytes_total"
+            - "kube_pod_container_resource_requests"
+            - "kube_pod_container_resource_limits"
+
+        kubernetes:
+          endpoint: "https://kubernetes.default.svc"
+          resources: ["pods", "nodes", "deployments", "services"]
+
+        custom_metrics:
+          - name: "request_rate"
+            query: "rate(http_requests_total[5m])"
+          - name: "error_rate"
+            query: "rate(http_requests_total{code=~'5..'}[5m])"
+          - name: "response_time"
+            query: "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))"
+
+      feature_engineering:
+        time_features:
+          - "hour_of_day"
+          - "day_of_week"
+          - "month_of_year"
+          - "is_weekend"
+          - "is_holiday"
+
+        lag_features:
+          periods: [1, 6, 12, 24, 168]  # 1h, 6h, 12h, 1d, 1w
+
+        rolling_features:
+          windows: ["1h", "6h", "24h", "7d"]
+          functions: ["mean", "std", "min", "max"]
+
+      model_training:
+        schedule: "0 2 * * *"  # Daily at 2 AM
+        validation_split: 0.2
+        test_split: 0.1
+        hyperparameter_tuning: true
+        cross_validation_folds: 5
+
+    # Automated scaling configuration
+    auto_scaling:
+      horizontal_pod_autoscaler:
+        enabled: true
+        target_cpu: 70
+        target_memory: 75
+        scale_up_stabilization: "60s"
+        scale_down_stabilization: "300s"
+
+      vertical_pod_autoscaler:
+        enabled: true
+        update_mode: "Auto"
+        resource_policy:
+          cpu_recommendation_margin: 15
+          memory_recommendation_margin: 15
+
+      cluster_autoscaler:
+        enabled: true
+        scale_down_enabled: true
+        scale_down_delay_after_add: "10m"
+        scale_down_unneeded_time: "20m"
+        max_node_provision_time: "15m"
+
+      custom_scaling:
+        enabled: true
+        rules:
+          - name: "market_data_scaling"
+            metric: "market_data_requests_per_second"
+            target: 1000
+            scale_factor: 1.2
+
+          - name: "analytics_queue_scaling"
+            metric: "analytics_queue_length"
+            target: 100
+            scale_factor: 1.5
+
+    # Reporting and recommendations
+    reporting:
+      schedule:
+        capacity_report: "0 8 * * 1"  # Weekly Monday 8 AM
+        cost_report: "0 8 1 * *"     # Monthly 1st day 8 AM
+        optimization_report: "0 8 * * *"  # Daily 8 AM
+
+      recipients:
+        capacity_report: ["sre-team@market-data.example.com", "engineering@market-data.example.com"]
+        cost_report: ["finance@market-data.example.com", "engineering-managers@market-data.example.com"]
+        optimization_report: ["devops@market-data.example.com"]
+
+      formats: ["html", "pdf", "json"]
+
+    # Integration with external systems
+    integrations:
+      aws_cost_explorer:
+        enabled: true
+        api_endpoint: "https://ce.us-east-1.amazonaws.com"
+        region: "us-east-1"
+
+      kubernetes_metrics_server:
+        enabled: true
+        endpoint: "https://metrics-server.kube-system.svc.cluster.local"
+
+      grafana:
+        enabled: true
+        endpoint: "https://grafana.market-data.example.com"
+        dashboard_creation: true
+
+      slack:
+        enabled: true
+        webhook_url_secret: "slack-webhook-url"
+        channels:
+          capacity_alerts: "#capacity-planning"
+          cost_alerts: "#cost-optimization"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capacity-planner
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+    component: capacity-planning
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: capacity-planner
+  template:
+    metadata:
+      labels:
+        app: capacity-planner
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9095"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: capacity-planner
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10006
+        runAsGroup: 10006
+        fsGroup: 10006
+      containers:
+      - name: capacity-planner
+        image: market-data/capacity-planner:1.0.0
+        ports:
+        - name: http
+          containerPort: 8096
+          protocol: TCP
+        - name: metrics
+          containerPort: 9095
+          protocol: TCP
+        env:
+        - name: CONFIG_FILE
+          value: "/etc/config/capacity/config.yaml"
+        - name: PROMETHEUS_URL
+          value: "http://prometheus.monitoring.svc.cluster.local:9090"
+        - name: KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: MODEL_STORAGE_PATH
+          value: "/var/lib/capacity-planner/models"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config/capacity
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets/capacity
+          readOnly: true
+        - name: model-storage
+          mountPath: /var/lib/capacity-planner/models
+        - name: data-storage
+          mountPath: /var/lib/capacity-planner/data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8096
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8096
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: capacity-planning-config
+      - name: secrets
+        secret:
+          secretName: capacity-planning-secrets
+          defaultMode: 0400
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: capacity-planner-models
+      - name: data-storage
+        persistentVolumeClaim:
+          claimName: capacity-planner-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: capacity-planner
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8096
+    protocol: TCP
+  - name: metrics
+    port: 9095
+    targetPort: 9095
+    protocol: TCP
+  selector:
+    app: capacity-planner
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: capacity-planner
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: capacity-planner
+  labels:
+    app: capacity-planner
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "services", "endpoints", "persistentvolumes", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+- apiGroups: ["custom.metrics.k8s.io"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: capacity-planner
+  labels:
+    app: capacity-planner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capacity-planner
+subjects:
+- kind: ServiceAccount
+  name: capacity-planner
+  namespace: capacity-planning
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: capacity-planning-secrets
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+type: Opaque
+data:
+  aws-access-key: QVdTX0FDQ0VTU19LRVlfSEVSRQ== # AWS_ACCESS_KEY_HERE
+  aws-secret-key: QVdTX1NFQ1JFVF9LRVlfSEVSRQ== # AWS_SECRET_KEY_HERE
+  grafana-api-key: R1JBRkFOQV9BUElfS0VZX0hFUkU= # GRAFANA_API_KEY_HERE
+  slack-webhook: U0xBQ0tfV0VCSE9PS19IRVJF # SLACK_WEBHOOK_HERE
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: capacity-planner-models
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+    component: model-storage
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: fast-ssd
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: capacity-planner-data
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+    component: data-storage
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard-ssd
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: capacity-model-training
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+    component: model-training
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: capacity-planner
+            component: model-training
+        spec:
+          serviceAccountName: capacity-planner
+          restartPolicy: OnFailure
+          containers:
+          - name: model-trainer
+            image: market-data/capacity-model-trainer:1.0.0
+            env:
+            - name: CONFIG_FILE
+              value: "/etc/config/capacity/config.yaml"
+            - name: PROMETHEUS_URL
+              value: "http://prometheus.monitoring.svc.cluster.local:9090"
+            - name: MODEL_STORAGE_PATH
+              value: "/var/lib/capacity-planner/models"
+            - name: TRAINING_DATA_DAYS
+              value: "90"
+            volumeMounts:
+            - name: config
+              mountPath: /etc/config/capacity
+              readOnly: true
+            - name: model-storage
+              mountPath: /var/lib/capacity-planner/models
+            - name: data-storage
+              mountPath: /var/lib/capacity-planner/data
+            resources:
+              limits:
+                cpu: 4000m
+                memory: 8Gi
+              requests:
+                cpu: 2000m
+                memory: 4Gi
+          volumes:
+          - name: config
+            configMap:
+              name: capacity-planning-config
+          - name: model-storage
+            persistentVolumeClaim:
+              claimName: capacity-planner-models
+          - name: data-storage
+            persistentVolumeClaim:
+              claimName: capacity-planner-data
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: capacity-planning-metrics
+  namespace: capacity-planning
+  labels:
+    app: capacity-planner
+spec:
+  selector:
+    matchLabels:
+      app: capacity-planner
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics

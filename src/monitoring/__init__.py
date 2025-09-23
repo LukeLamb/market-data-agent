@@ -107,9 +107,9 @@ def check_alerts() -> list:
     metrics = get_default_metrics().get_current_metrics()
     return get_default_alerts().check_alerts(metrics)
 
-def get_dashboard(layout_name: str = 'overview') -> dict:
+async def get_dashboard(layout_name: str = 'overview') -> dict:
     """Generate dashboard data using the default dashboard."""
-    return get_default_dashboard().generate_dashboard(layout_name)
+    return await get_default_dashboard().generate_dashboard(layout_name)
 
 __all__ = [
     # Main classes

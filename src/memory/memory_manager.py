@@ -114,10 +114,10 @@ class MemoryManager:
             # Load cached patterns
             await self._load_pattern_cache()
 
-            print("✓ Memory system initialized successfully")
+            print("Memory system initialized successfully")
 
         except Exception as e:
-            print(f"⚠ Memory system initialization failed: {e}")
+            print(f"Memory system initialization failed: {e}")
             self.memory_server_available = False
 
     async def learn_from_price_data(self,

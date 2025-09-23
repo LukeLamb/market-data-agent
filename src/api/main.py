@@ -7,6 +7,7 @@ It can be run directly or used with uvicorn for production deployment.
 import uvicorn
 import os
 import logging
+from dotenv import load_dotenv
 from .endpoints import app
 from ..config.config_manager import load_config
 
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 def main():
     """Main function to run the API server"""
     try:
+        # Load environment variables from .env file
+        load_dotenv()
+
         # Load configuration
         config = load_config("config.yaml")
         api_config = config.api

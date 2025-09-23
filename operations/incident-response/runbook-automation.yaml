@@ -1,0 +1,496 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runbook-automation
+  namespace: incident-response
+  labels:
+    app: runbook-automation
+    component: incident-response
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: runbook-automation
+  template:
+    metadata:
+      labels:
+        app: runbook-automation
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9094"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: incident-response
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10005
+        runAsGroup: 10005
+        fsGroup: 10005
+      containers:
+      - name: runbook-automation
+        image: market-data/runbook-automation:1.0.0
+        ports:
+        - name: http
+          containerPort: 8095
+          protocol: TCP
+        - name: metrics
+          containerPort: 9094
+          protocol: TCP
+        env:
+        - name: CONFIG_FILE
+          value: "/etc/config/incident/config.yaml"
+        - name: PROMETHEUS_URL
+          value: "http://prometheus.monitoring.svc.cluster.local:9090"
+        - name: ALERTMANAGER_URL
+          value: "http://alertmanager.monitoring.svc.cluster.local:9093"
+        - name: KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config/incident
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets/incident
+          readOnly: true
+        - name: runbooks
+          mountPath: /etc/runbooks
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8095
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8095
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_RAW  # For network connectivity checks
+      volumes:
+      - name: config
+        configMap:
+          name: incident-response-config
+      - name: secrets
+        secret:
+          secretName: incident-response-secrets
+          defaultMode: 0400
+      - name: runbooks
+        configMap:
+          name: runbook-scripts
+          defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: runbook-automation
+  namespace: incident-response
+  labels:
+    app: runbook-automation
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8095
+    protocol: TCP
+  - name: metrics
+    port: 9094
+    targetPort: 9094
+    protocol: TCP
+  selector:
+    app: runbook-automation
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: incident-response
+  namespace: incident-response
+  labels:
+    app: incident-response
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: incident-response
+  labels:
+    app: incident-response
+rules:
+# Pod management for incident response
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Service and endpoint management
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+# Deployment and ReplicaSet management
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch", "update", "patch", "create"]
+# HPA management for scaling
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+# Node information for infrastructure issues
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+# ConfigMap and Secret management
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+# Event creation for audit trail
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+# Ingress management
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+# Custom resource management (Kong, Prometheus)
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["kongplugins", "kongingresses", "kongconsumers"]
+  verbs: ["get", "list", "watch", "update", "patch", "create"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["prometheusrules", "servicemonitors"]
+  verbs: ["get", "list", "watch", "update", "patch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: incident-response
+  labels:
+    app: incident-response
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: incident-response
+subjects:
+- kind: ServiceAccount
+  name: incident-response
+  namespace: incident-response
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: incident-response-secrets
+  namespace: incident-response
+  labels:
+    app: incident-response
+type: Opaque
+data:
+  pagerduty-service-key: UERfU0VSVklDRV9LRVlfSEVSRQ== # PD_SERVICE_KEY_HERE
+  slack-webhook-url: U0xBQ0tfV0VCSE9PS19VUkxfSEVSRQ== # SLACK_WEBHOOK_URL_HERE
+  grafana-api-key: R1JBRkFOQV9BUElfS0VZX0hFUkU= # GRAFANA_API_KEY_HERE
+  jira-api-token: SklSQV9BUElfVE9LRU5fSEVSRQ== # JIRA_API_TOKEN_HERE
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runbook-scripts
+  namespace: incident-response
+  labels:
+    app: runbook-automation
+data:
+  database-recovery.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    # Database Recovery Runbook
+    echo "Starting database recovery procedure..."
+
+    # Check database pod status
+    echo "Checking database pod status..."
+    kubectl get pods -l app=postgresql -n market-data
+
+    # Check database connectivity
+    echo "Testing database connectivity..."
+    if ! kubectl exec -n market-data deployment/market-data-agent -- pg_isready -h postgresql -p 5432; then
+        echo "Database not ready, attempting restart..."
+        kubectl rollout restart deployment/postgresql -n market-data
+        kubectl rollout status deployment/postgresql -n market-data --timeout=300s
+    fi
+
+    # Verify application connectivity
+    echo "Verifying application connectivity..."
+    kubectl exec -n market-data deployment/market-data-agent -- curl -f http://localhost:8080/health/db
+
+    echo "Database recovery completed successfully"
+
+  service-restart.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    SERVICE_NAME=${1:-"market-data-agent"}
+    NAMESPACE=${2:-"market-data"}
+
+    echo "Restarting service: $SERVICE_NAME in namespace: $NAMESPACE"
+
+    # Graceful restart
+    kubectl rollout restart deployment/$SERVICE_NAME -n $NAMESPACE
+
+    # Wait for rollout to complete
+    kubectl rollout status deployment/$SERVICE_NAME -n $NAMESPACE --timeout=300s
+
+    # Verify service health
+    sleep 30
+    kubectl get pods -l app=$SERVICE_NAME -n $NAMESPACE
+
+    echo "Service restart completed"
+
+  scale-service.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    SERVICE_NAME=${1:-"market-data-agent"}
+    NAMESPACE=${2:-"market-data"}
+    REPLICAS=${3:-"3"}
+
+    echo "Scaling service: $SERVICE_NAME to $REPLICAS replicas"
+
+    # Scale the deployment
+    kubectl scale deployment/$SERVICE_NAME --replicas=$REPLICAS -n $NAMESPACE
+
+    # Wait for scaling to complete
+    kubectl rollout status deployment/$SERVICE_NAME -n $NAMESPACE --timeout=300s
+
+    # Verify scaled pods are ready
+    kubectl get pods -l app=$SERVICE_NAME -n $NAMESPACE
+
+    echo "Service scaling completed"
+
+  network-diagnostics.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    SERVICE_NAME=${1:-"market-data-agent"}
+    NAMESPACE=${2:-"market-data"}
+
+    echo "Running network diagnostics for $SERVICE_NAME"
+
+    # Check service endpoints
+    kubectl get endpoints $SERVICE_NAME -n $NAMESPACE
+
+    # Check service connectivity
+    kubectl run network-test --rm -i --restart=Never --image=nicolaka/netshoot -n $NAMESPACE -- \
+        nslookup $SERVICE_NAME.$NAMESPACE.svc.cluster.local
+
+    # Check external connectivity
+    kubectl run connectivity-test --rm -i --restart=Never --image=nicolaka/netshoot -n $NAMESPACE -- \
+        curl -I https://api.market-data.example.com/health
+
+    echo "Network diagnostics completed"
+
+  memory-cleanup.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    NAMESPACE=${1:-"market-data"}
+    MEMORY_THRESHOLD=${2:-"90"}
+
+    echo "Checking for high memory usage pods (threshold: ${MEMORY_THRESHOLD}%)"
+
+    # Get memory usage metrics and identify high usage pods
+    kubectl top pods -n $NAMESPACE --sort-by=memory
+
+    # Restart pods with high memory usage
+    HIGH_MEMORY_PODS=$(kubectl top pods -n $NAMESPACE --no-headers | awk -v threshold=$MEMORY_THRESHOLD '
+        {
+            if (index($3, "Mi") > 0) {
+                memory = substr($3, 1, length($3)-2)
+                if (memory > threshold * 10) print $1  # Rough threshold calculation
+            }
+        }')
+
+    if [ -n "$HIGH_MEMORY_PODS" ]; then
+        echo "Found high memory usage pods, restarting..."
+        for pod in $HIGH_MEMORY_PODS; do
+            echo "Restarting pod: $pod"
+            kubectl delete pod $pod -n $NAMESPACE
+        done
+    else
+        echo "No high memory usage pods found"
+    fi
+
+  circuit-breaker-control.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    ACTION=${1:-"status"}  # status, enable, disable
+    SERVICE=${2:-"market-data-service"}
+
+    echo "Circuit breaker $ACTION for service: $SERVICE"
+
+    case $ACTION in
+        "enable")
+            kubectl patch kongplugin circuit-breaker-$SERVICE -n kong --type='merge' -p='{"disabled": false}'
+            echo "Circuit breaker enabled for $SERVICE"
+            ;;
+        "disable")
+            kubectl patch kongplugin circuit-breaker-$SERVICE -n kong --type='merge' -p='{"disabled": true}'
+            echo "Circuit breaker disabled for $SERVICE"
+            ;;
+        "status")
+            kubectl get kongplugin circuit-breaker-$SERVICE -n kong -o jsonpath='{.disabled}'
+            ;;
+        *)
+            echo "Invalid action: $ACTION. Use: status, enable, disable"
+            exit 1
+            ;;
+    esac
+
+  failover-procedure.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    DIRECTION=${1:-"to-backup"}  # to-backup, to-primary
+
+    echo "Initiating failover: $DIRECTION"
+
+    case $DIRECTION in
+        "to-backup")
+            # Switch traffic to backup systems
+            kubectl patch ingress market-data-ingress -n kong --type='merge' -p='
+            {
+                "spec": {
+                    "rules": [
+                        {
+                            "host": "api.market-data.example.com",
+                            "http": {
+                                "paths": [
+                                    {
+                                        "path": "/",
+                                        "pathType": "Prefix",
+                                        "backend": {
+                                            "service": {
+                                                "name": "market-data-backup-service",
+                                                "port": {"number": 80}
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }'
+            echo "Traffic switched to backup systems"
+            ;;
+        "to-primary")
+            # Switch traffic back to primary systems
+            kubectl patch ingress market-data-ingress -n kong --type='merge' -p='
+            {
+                "spec": {
+                    "rules": [
+                        {
+                            "host": "api.market-data.example.com",
+                            "http": {
+                                "paths": [
+                                    {
+                                        "path": "/",
+                                        "pathType": "Prefix",
+                                        "backend": {
+                                            "service": {
+                                                "name": "market-data-service",
+                                                "port": {"number": 80}
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }'
+            echo "Traffic switched back to primary systems"
+            ;;
+        *)
+            echo "Invalid direction: $DIRECTION. Use: to-backup, to-primary"
+            exit 1
+            ;;
+    esac
+
+    # Verify the change
+    kubectl get ingress market-data-ingress -n kong -o yaml
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: incident-metrics-collector
+  namespace: incident-response
+  labels:
+    app: incident-response
+    component: metrics-collector
+spec:
+  schedule: "*/5 * * * *"  # Every 5 minutes
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: incident-response
+            component: metrics-collector
+        spec:
+          serviceAccountName: incident-response
+          restartPolicy: OnFailure
+          containers:
+          - name: metrics-collector
+            image: market-data/incident-metrics-collector:1.0.0
+            env:
+            - name: PROMETHEUS_URL
+              value: "http://prometheus.monitoring.svc.cluster.local:9090"
+            - name: METRICS_RETENTION
+              value: "90d"
+            volumeMounts:
+            - name: config
+              mountPath: /etc/config/incident
+              readOnly: true
+            resources:
+              limits:
+                cpu: 200m
+                memory: 256Mi
+              requests:
+                cpu: 100m
+                memory: 128Mi
+          volumes:
+          - name: config
+            configMap:
+              name: incident-response-config
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: incident-response-metrics
+  namespace: incident-response
+  labels:
+    app: incident-response
+spec:
+  selector:
+    matchLabels:
+      app: runbook-automation
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics

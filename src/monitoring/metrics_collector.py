@@ -110,12 +110,16 @@ class MetricsCollector:
         self.counters: Dict[str, int] = defaultdict(int)
         self.gauges: Dict[str, float] = defaultdict(float)
         self.timers: Dict[str, List[float]] = defaultdict(list)
+        self.histograms: Dict[str, List[float]] = defaultdict(list)
         self.rates: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
 
         # Alert system
         self.alert_rules: Dict[str, AlertRule] = {}
         self.active_alerts: Dict[str, Alert] = {}
         self.alert_history: List[Alert] = []
+
+        # Collection tracking
+        self.collection_start_time = datetime.now()
 
         # Collection state
         self.is_collecting = False
@@ -560,6 +564,118 @@ class MetricsCollector:
             "collection_active": self.is_collecting
         }
 
+    def get_current_metrics(self) -> Dict[str, Any]:
+        """Get current snapshot of all metrics with timestamp
+
+        Returns:
+            Dictionary with current metric values and metadata
+        """
+        current_time = datetime.now()
+
+        # Get basic metrics
+        metrics_data = self.get_all_metrics()
+
+        # Add histogram data
+        histograms = {}
+        for name, values in self.histograms.items():
+            if values:
+                histograms[name] = {
+                    "count": len(values),
+                    "mean": statistics.mean(values),
+                    "median": statistics.median(values),
+                    "min": min(values),
+                    "max": max(values),
+                    "std_dev": statistics.stdev(values) if len(values) > 1 else 0,
+                    "percentiles": {
+                        "p50": statistics.median(values),
+                        "p90": self._calculate_percentile(values, 0.9),
+                        "p95": self._calculate_percentile(values, 0.95),
+                        "p99": self._calculate_percentile(values, 0.99)
+                    }
+                }
+            else:
+                histograms[name] = {
+                    "count": 0,
+                    "mean": 0,
+                    "median": 0,
+                    "min": 0,
+                    "max": 0,
+                    "std_dev": 0,
+                    "percentiles": {"p50": 0, "p90": 0, "p95": 0, "p99": 0}
+                }
+
+        # Calculate rates for counters
+        rates = {}
+        for name, count in self.counters.items():
+            # Simple rate calculation (would be enhanced with time-based tracking)
+            rates[f"{name}_per_second"] = count / max(1, (current_time - self.collection_start_time).total_seconds())
+
+        # Enhanced response with metadata
+        return {
+            "timestamp": current_time.isoformat(),
+            "collection_duration_seconds": (current_time - self.collection_start_time).total_seconds(),
+            "counters": metrics_data["counters"],
+            "gauges": metrics_data["gauges"],
+            "timers": metrics_data["timers"],
+            "histograms": histograms,
+            "rates": rates,
+            "alerts": {
+                "active_count": metrics_data["active_alerts"],
+                "total_count": metrics_data["total_alerts"],
+                "active_alerts": [
+                    {
+                        "name": alert["name"],
+                        "severity": alert["severity"].value,
+                        "message": alert["message"],
+                        "triggered_at": alert["triggered_at"].isoformat(),
+                        "value": alert["value"]
+                    }
+                    for alert in list(self.active_alerts.values())[:10]  # Limit to 10 most recent
+                ]
+            },
+            "system": {
+                "collection_active": metrics_data["collection_active"],
+                "total_metrics": len(self.counters) + len(self.gauges) + len(self.timers) + len(self.histograms),
+                "memory_usage_mb": self._estimate_memory_usage()
+            }
+        }
+
+    def _calculate_percentile(self, values: List[float], percentile: float) -> float:
+        """Calculate percentile value from list of values
+
+        Args:
+            values: List of numeric values
+            percentile: Percentile to calculate (0.0 to 1.0)
+
+        Returns:
+            Percentile value
+        """
+        if not values:
+            return 0.0
+
+        sorted_values = sorted(values)
+        index = int(percentile * (len(sorted_values) - 1))
+        return sorted_values[index]
+
+    def _estimate_memory_usage(self) -> float:
+        """Estimate memory usage of metrics collection in MB
+
+        Returns:
+            Estimated memory usage in megabytes
+        """
+        # Simple estimation based on number of stored values
+        total_values = (
+            len(self.counters) +
+            len(self.gauges) +
+            sum(len(values) for values in self.timers.values()) +
+            sum(len(values) for values in self.histograms.values()) +
+            len(self.alert_history)
+        )
+
+        # Rough estimate: 100 bytes per value + overhead
+        estimated_bytes = total_values * 100 + 1024 * 1024  # 1MB overhead
+        return estimated_bytes / (1024 * 1024)  # Convert to MB
+
     def get_active_alerts(self) -> List[Dict[str, Any]]:
         """Get all active alerts
 
@@ -627,6 +743,23 @@ class MetricsCollector:
                 lines.append(f"{name},{metric_value.metadata.get('type', 'unknown')},{metric_value.value},{metric_value.timestamp.isoformat()}")
 
         return "\n".join(lines)
+
+    def time_operation(self, name: str, labels: Optional[Dict[str, str]] = None) -> 'TimerContext':
+        """Create a timer context for measuring operation duration
+
+        Args:
+            name: Timer metric name
+            labels: Additional labels for the timer
+
+        Returns:
+            TimerContext: Context manager for timing operations
+
+        Usage:
+            with metrics_collector.time_operation('api_request', {'endpoint': '/health'}):
+                # Your operation here
+                pass
+        """
+        return TimerContext(self, name, labels)
 
 
 class TimerContext:

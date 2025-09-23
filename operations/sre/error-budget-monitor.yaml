@@ -1,0 +1,473 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: error-budget-monitor
+  namespace: monitoring
+  labels:
+    app: error-budget-monitor
+    component: sre-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: error-budget-monitor
+  template:
+    metadata:
+      labels:
+        app: error-budget-monitor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9093"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: sre-platform
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10004
+        runAsGroup: 10004
+        fsGroup: 10004
+      containers:
+      - name: error-budget-monitor
+        image: market-data/error-budget-monitor:1.0.0
+        ports:
+        - name: http
+          containerPort: 8090
+          protocol: TCP
+        - name: metrics
+          containerPort: 9093
+          protocol: TCP
+        env:
+        - name: CONFIG_FILE
+          value: "/etc/config/sre/slo-config.yaml"
+        - name: PROMETHEUS_URL
+          value: "http://prometheus.monitoring.svc.cluster.local:9090"
+        - name: ALERTMANAGER_URL
+          value: "http://alertmanager.monitoring.svc.cluster.local:9093"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config/sre
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets/sre
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8090
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: slo-definitions
+      - name: secrets
+        secret:
+          secretName: sre-platform-secrets
+          defaultMode: 0400
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - error-budget-monitor
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: error-budget-monitor
+  namespace: monitoring
+  labels:
+    app: error-budget-monitor
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8090
+    protocol: TCP
+  - name: metrics
+    port: 9093
+    targetPort: 9093
+    protocol: TCP
+  selector:
+    app: error-budget-monitor
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sre-platform
+  namespace: monitoring
+  labels:
+    app: sre-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sre-platform
+  labels:
+    app: sre-platform
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["prometheusrules", "servicemonitors"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-platform
+  labels:
+    app: sre-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sre-platform
+subjects:
+- kind: ServiceAccount
+  name: sre-platform
+  namespace: monitoring
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sre-platform-secrets
+  namespace: monitoring
+  labels:
+    app: sre-platform
+type: Opaque
+data:
+  pagerduty-token: UERfVE9LRU5fSEVSRQ== # PD_TOKEN_HERE
+  slack-webhook: U0xBQ0tfV0VCSE9PS19IRVJF # SLACK_WEBHOOK_HERE
+  grafana-api-key: R1JBRkFOQV9BUElfS0VZX0hFUkU= # GRAFANA_API_KEY_HERE
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: slo-report-generator
+  namespace: monitoring
+  labels:
+    app: sre-platform
+    component: slo-reporting
+spec:
+  schedule: "0 8 * * 1"  # Weekly on Monday at 8 AM
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: sre-platform
+            component: slo-reporting
+        spec:
+          serviceAccountName: sre-platform
+          restartPolicy: OnFailure
+          containers:
+          - name: slo-reporter
+            image: market-data/slo-reporter:1.0.0
+            env:
+            - name: CONFIG_FILE
+              value: "/etc/config/sre/slo-config.yaml"
+            - name: PROMETHEUS_URL
+              value: "http://prometheus.monitoring.svc.cluster.local:9090"
+            - name: REPORT_TYPE
+              value: "weekly"
+            - name: OUTPUT_FORMAT
+              value: "html,pdf"
+            volumeMounts:
+            - name: config
+              mountPath: /etc/config/sre
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/secrets/sre
+              readOnly: true
+            resources:
+              limits:
+                cpu: 500m
+                memory: 512Mi
+              requests:
+                cpu: 200m
+                memory: 256Mi
+          volumes:
+          - name: config
+            configMap:
+              name: slo-definitions
+          - name: secrets
+            secret:
+              secretName: sre-platform-secrets
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-burn-rate-alerts
+  namespace: monitoring
+  labels:
+    app: sre-platform
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+  - name: slo.burn.rate
+    interval: 30s
+    rules:
+    # API Gateway SLO Burn Rate Alerts
+    - alert: APIGatewayHighBurnRate
+      expr: |
+        (
+          (1 - (sum(rate(kong_http_requests_total{code!~"5.."}[1h])) / sum(rate(kong_http_requests_total[1h])))) > 0.144
+        )
+      for: 2m
+      labels:
+        severity: critical
+        service: api-gateway
+        slo: availability
+      annotations:
+        summary: "API Gateway availability SLO burn rate is too high"
+        description: "The API Gateway availability SLO is burning error budget at {{ $value | humanizePercentage }} per hour"
+
+    - alert: APIGatewayLatencyHigh
+      expr: |
+        histogram_quantile(0.95, sum(rate(kong_request_duration_bucket[5m])) by (le)) * 1000 > 500
+      for: 5m
+      labels:
+        severity: warning
+        service: api-gateway
+        slo: latency
+      annotations:
+        summary: "API Gateway latency SLO violation"
+        description: "API Gateway 95th percentile latency is {{ $value }}ms, exceeding 500ms threshold"
+
+    # Market Data Service SLO Alerts
+    - alert: MarketDataServiceHighErrorRate
+      expr: |
+        (
+          (1 - (sum(rate(http_requests_total{job="market-data-agent",code!~"5.."}[1h])) / sum(rate(http_requests_total{job="market-data-agent"}[1h])))) > 0.05
+        )
+      for: 2m
+      labels:
+        severity: critical
+        service: market-data
+        slo: availability
+      annotations:
+        summary: "Market Data Service availability SLO burn rate too high"
+        description: "Market Data Service error rate is {{ $value | humanizePercentage }}, burning error budget rapidly"
+
+    - alert: MarketDataFreshnessViolation
+      expr: |
+        (time() - market_data_last_update_timestamp) / 60 > 5
+      for: 1m
+      labels:
+        severity: critical
+        service: market-data
+        slo: freshness
+      annotations:
+        summary: "Market data freshness SLO violation"
+        description: "Market data is {{ $value }} minutes old, exceeding 5-minute freshness SLO"
+
+    # Database SLO Alerts
+    - alert: DatabaseAvailabilityLow
+      expr: |
+        (sum(up{job="postgresql"}) / count(up{job="postgresql"})) * 100 < 99.9
+      for: 1m
+      labels:
+        severity: critical
+        service: database
+        slo: availability
+      annotations:
+        summary: "Database availability SLO violation"
+        description: "Database availability is {{ $value }}%, below 99.9% SLO"
+
+    # Error Budget Exhaustion Alerts
+    - alert: ErrorBudgetExhaustion
+      expr: |
+        slo_error_budget_remaining_ratio < 0.1
+      for: 0m
+      labels:
+        severity: warning
+        alert_type: error_budget
+      annotations:
+        summary: "Error budget nearly exhausted for {{ $labels.service }}"
+        description: "Only {{ $value | humanizePercentage }} of error budget remaining for {{ $labels.service }}"
+
+    - alert: ErrorBudgetCritical
+      expr: |
+        slo_error_budget_remaining_ratio < 0.05
+      for: 0m
+      labels:
+        severity: critical
+        alert_type: error_budget
+      annotations:
+        summary: "Error budget critically low for {{ $labels.service }}"
+        description: "Only {{ $value | humanizePercentage }} of error budget remaining for {{ $labels.service }} - consider feature freeze"
+
+  - name: slo.recording.rules
+    interval: 30s
+    rules:
+    # API Gateway SLI Recording Rules
+    - record: sli:api_gateway_availability_5m
+      expr: |
+        (
+          sum(rate(kong_http_requests_total{code!~"5.."}[5m])) /
+          sum(rate(kong_http_requests_total[5m]))
+        ) * 100
+
+    - record: sli:api_gateway_latency_p95_5m
+      expr: |
+        histogram_quantile(0.95,
+          sum(rate(kong_request_duration_bucket[5m])) by (le)
+        ) * 1000
+
+    # Market Data Service SLI Recording Rules
+    - record: sli:market_data_availability_5m
+      expr: |
+        (
+          sum(rate(http_requests_total{job="market-data-agent",code!~"5.."}[5m])) /
+          sum(rate(http_requests_total{job="market-data-agent"}[5m]))
+        ) * 100
+
+    - record: sli:market_data_latency_p99_5m
+      expr: |
+        histogram_quantile(0.99,
+          sum(rate(http_request_duration_seconds_bucket{job="market-data-agent"}[5m])) by (le)
+        ) * 1000
+
+    # Error Budget Recording Rules
+    - record: slo_error_budget_remaining_ratio
+      expr: |
+        1 - (
+          (1 - sli:api_gateway_availability_5m / 100) /
+          (1 - 99.9 / 100)
+        )
+      labels:
+        service: api-gateway
+        slo: availability
+
+    - record: slo_error_budget_remaining_ratio
+      expr: |
+        1 - (
+          (1 - sli:market_data_availability_5m / 100) /
+          (1 - 99.95 / 100)
+        )
+      labels:
+        service: market-data
+        slo: availability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slo-dashboard-config
+  namespace: monitoring
+  labels:
+    app: sre-platform
+    component: dashboards
+data:
+  slo-overview-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "SLO Overview Dashboard",
+        "tags": ["sre", "slo"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Error Budget Burn Rate",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "slo_error_budget_remaining_ratio",
+                "legendFormat": "{{service}} - {{slo}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {"color": "red", "value": 0},
+                    {"color": "yellow", "value": 0.1},
+                    {"color": "green", "value": 0.5}
+                  ]
+                },
+                "unit": "percentunit"
+              }
+            }
+          },
+          {
+            "id": 2,
+            "title": "API Gateway Availability",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "sli:api_gateway_availability_5m",
+                "legendFormat": "Availability %"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {"drawStyle": "line"},
+                "unit": "percent"
+              }
+            }
+          },
+          {
+            "id": 3,
+            "title": "Service Latency Distribution",
+            "type": "heatmap",
+            "targets": [
+              {
+                "expr": "sum(rate(kong_request_duration_bucket[5m])) by (le)",
+                "legendFormat": "{{le}}"
+              }
+            ]
+          }
+        ],
+        "time": {
+          "from": "now-24h",
+          "to": "now"
+        },
+        "refresh": "30s"
+      }
+    }

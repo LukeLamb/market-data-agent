@@ -770,6 +770,39 @@ class MonitoringDashboard:
             for layout_id, layout in self.layouts.items()
         ]
 
+    async def generate_dashboard(self, layout_name: str = None) -> Dict[str, Any]:
+        """Generate complete dashboard data for specified layout
+
+        Args:
+            layout_name: Name of layout to generate (uses current if None)
+
+        Returns:
+            Complete dashboard data dictionary
+        """
+        # Set layout if specified
+        if layout_name:
+            if not self.set_current_layout(layout_name):
+                return {"error": f"Layout '{layout_name}' not found", "available_layouts": list(self.layouts.keys())}
+
+        # Get dashboard data for current layout
+        dashboard_data = await self.get_current_dashboard_data()
+
+        # Add additional metadata
+        dashboard_data.update({
+            "available_layouts": self.get_available_layouts(),
+            "real_time_data": self.real_time_data,
+            "cache_stats": {
+                "cached_widgets": len(self.widget_cache),
+                "cache_ttl_seconds": self.cache_ttl_seconds
+            },
+            "update_status": {
+                "real_time_updates_active": self.is_running,
+                "update_task_running": self.update_task is not None and not self.update_task.done() if self.update_task else False
+            }
+        })
+
+        return dashboard_data
+
     def export_dashboard_config(self) -> str:
         """Export dashboard configuration as JSON
 

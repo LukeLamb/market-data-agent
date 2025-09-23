@@ -1,0 +1,347 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slo-definitions
+  namespace: monitoring
+  labels:
+    app: sre-platform
+    component: slo-definitions
+data:
+  slo-config.yaml: |
+    # Service Level Objectives (SLO) Configuration for Market Data Agent
+    # Following Google SRE best practices
+
+    slos:
+      # API Gateway SLOs
+      - name: "api_gateway_availability"
+        description: "API Gateway availability SLO"
+        service: "kong-proxy"
+        sli:
+          name: "availability"
+          query: |
+            (
+              sum(rate(kong_http_requests_total{code!~"5.."}[5m])) /
+              sum(rate(kong_http_requests_total[5m]))
+            ) * 100
+          unit: "percent"
+
+        objectives:
+          - period: "30d"
+            target: 99.9
+            error_budget: 0.1
+          - period: "7d"
+            target: 99.95
+            error_budget: 0.05
+          - period: "1d"
+            target: 99.99
+            error_budget: 0.01
+
+        alerting:
+          - severity: "warning"
+            condition: "sli < 99.5"
+            duration: "5m"
+          - severity: "critical"
+            condition: "sli < 99.0"
+            duration: "2m"
+
+      - name: "api_gateway_latency"
+        description: "API Gateway response time SLO"
+        service: "kong-proxy"
+        sli:
+          name: "latency_p95"
+          query: |
+            histogram_quantile(0.95,
+              sum(rate(kong_request_duration_bucket[5m])) by (le)
+            ) * 1000
+          unit: "milliseconds"
+
+        objectives:
+          - period: "30d"
+            target: 500
+            error_budget: 100
+          - period: "7d"
+            target: 300
+            error_budget: 50
+          - period: "1d"
+            target: 200
+            error_budget: 25
+
+        alerting:
+          - severity: "warning"
+            condition: "sli > 800"
+            duration: "5m"
+          - severity: "critical"
+            condition: "sli > 1500"
+            duration: "2m"
+
+      # Market Data Service SLOs
+      - name: "market_data_availability"
+        description: "Market Data Service availability SLO"
+        service: "market-data-agent"
+        sli:
+          name: "availability"
+          query: |
+            (
+              sum(rate(http_requests_total{job="market-data-agent",code!~"5.."}[5m])) /
+              sum(rate(http_requests_total{job="market-data-agent"}[5m]))
+            ) * 100
+          unit: "percent"
+
+        objectives:
+          - period: "30d"
+            target: 99.95
+            error_budget: 0.05
+          - period: "7d"
+            target: 99.98
+            error_budget: 0.02
+          - period: "1d"
+            target: 99.99
+            error_budget: 0.01
+
+      - name: "market_data_latency"
+        description: "Market Data Service latency SLO"
+        service: "market-data-agent"
+        sli:
+          name: "latency_p99"
+          query: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket{job="market-data-agent"}[5m])) by (le)
+            ) * 1000
+          unit: "milliseconds"
+
+        objectives:
+          - period: "30d"
+            target: 1000
+            error_budget: 200
+          - period: "7d"
+            target: 800
+            error_budget: 100
+          - period: "1d"
+            target: 500
+            error_budget: 50
+
+      - name: "market_data_freshness"
+        description: "Market Data freshness SLO"
+        service: "market-data-agent"
+        sli:
+          name: "data_freshness"
+          query: |
+            (time() - market_data_last_update_timestamp) / 60
+          unit: "minutes"
+
+        objectives:
+          - period: "30d"
+            target: 5
+            error_budget: 2
+          - period: "7d"
+            target: 3
+            error_budget: 1
+          - period: "1d"
+            target: 1
+            error_budget: 0.5
+
+      # Database SLOs
+      - name: "database_availability"
+        description: "PostgreSQL database availability SLO"
+        service: "postgresql"
+        sli:
+          name: "availability"
+          query: |
+            (
+              sum(up{job="postgresql"}) /
+              count(up{job="postgresql"})
+            ) * 100
+          unit: "percent"
+
+        objectives:
+          - period: "30d"
+            target: 99.9
+            error_budget: 0.1
+
+      - name: "database_latency"
+        description: "Database query latency SLO"
+        service: "postgresql"
+        sli:
+          name: "query_latency_p95"
+          query: |
+            histogram_quantile(0.95,
+              sum(rate(pg_stat_statements_mean_time_bucket[5m])) by (le)
+            )
+          unit: "milliseconds"
+
+        objectives:
+          - period: "30d"
+            target: 100
+            error_budget: 25
+
+      # Redis Cache SLOs
+      - name: "redis_availability"
+        description: "Redis cache availability SLO"
+        service: "redis"
+        sli:
+          name: "availability"
+          query: |
+            (
+              sum(up{job="redis"}) /
+              count(up{job="redis"})
+            ) * 100
+          unit: "percent"
+
+        objectives:
+          - period: "30d"
+            target: 99.5
+            error_budget: 0.5
+
+      - name: "redis_hit_ratio"
+        description: "Redis cache hit ratio SLO"
+        service: "redis"
+        sli:
+          name: "cache_hit_ratio"
+          query: |
+            (
+              rate(redis_keyspace_hits_total[5m]) /
+              (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m]))
+            ) * 100
+          unit: "percent"
+
+        objectives:
+          - period: "30d"
+            target: 95
+            error_budget: 5
+
+      # Analytics Service SLOs
+      - name: "analytics_availability"
+        description: "Analytics Service availability SLO"
+        service: "analytics-agent"
+        sli:
+          name: "availability"
+          query: |
+            (
+              sum(rate(http_requests_total{job="analytics-agent",code!~"5.."}[5m])) /
+              sum(rate(http_requests_total{job="analytics-agent"}[5m]))
+            ) * 100
+          unit: "percent"
+
+        objectives:
+          - period: "30d"
+            target: 99.5
+            error_budget: 0.5
+
+      - name: "analytics_computation_time"
+        description: "Analytics computation time SLO"
+        service: "analytics-agent"
+        sli:
+          name: "computation_latency_p90"
+          query: |
+            histogram_quantile(0.90,
+              sum(rate(analytics_computation_duration_seconds_bucket[5m])) by (le)
+            )
+          unit: "seconds"
+
+        objectives:
+          - period: "30d"
+            target: 30
+            error_budget: 10
+
+    # Error Budget Policies
+    error_budget_policies:
+      - name: "default_policy"
+        description: "Default error budget policy for all services"
+        burn_rate_thresholds:
+          - severity: "critical"
+            burn_rate: 14.4  # 1% in 1 hour (for 99% SLO)
+            window: "1h"
+          - severity: "high"
+            burn_rate: 6     # 1% in 2 hours
+            window: "2h"
+          - severity: "medium"
+            burn_rate: 1     # 1% in 1 day
+            window: "1d"
+          - severity: "low"
+            burn_rate: 0.1   # 1% in 10 days
+            window: "10d"
+
+      - name: "critical_service_policy"
+        description: "Policy for critical services (market data, API gateway)"
+        services: ["market-data-agent", "kong-proxy"]
+        burn_rate_thresholds:
+          - severity: "critical"
+            burn_rate: 28.8  # 0.5% in 1 hour (for 99.5% SLO)
+            window: "1h"
+          - severity: "high"
+            burn_rate: 12    # 0.5% in 2 hours
+            window: "2h"
+          - severity: "medium"
+            burn_rate: 2     # 0.5% in 1 day
+            window: "1d"
+
+    # SLI Collection Configuration
+    sli_collection:
+      scrape_interval: "30s"
+      evaluation_interval: "1m"
+      retention: "90d"
+
+      # Custom metrics for business SLIs
+      custom_metrics:
+        - name: "market_data_last_update_timestamp"
+          description: "Timestamp of last market data update"
+          type: "gauge"
+          labels: ["symbol", "exchange"]
+
+        - name: "analytics_computation_duration_seconds"
+          description: "Time taken for analytics computations"
+          type: "histogram"
+          labels: ["computation_type", "data_source"]
+          buckets: [0.1, 0.5, 1, 5, 10, 30, 60, 300]
+
+        - name: "user_request_satisfaction"
+          description: "User satisfaction score based on response time"
+          type: "histogram"
+          labels: ["endpoint", "user_tier"]
+          buckets: [0.1, 0.5, 1, 2, 5]
+
+    # Reporting Configuration
+    reporting:
+      enabled: true
+      schedule:
+        daily: "0 8 * * *"    # 8 AM daily
+        weekly: "0 8 * * 1"   # 8 AM every Monday
+        monthly: "0 8 1 * *"  # 8 AM first day of month
+
+      recipients:
+        - type: "email"
+          addresses: ["sre-team@market-data.example.com", "engineering@market-data.example.com"]
+        - type: "slack"
+          webhook: "${SLACK_WEBHOOK_URL}"
+
+      dashboards:
+        - name: "SLO Overview"
+          url: "https://grafana.market-data.example.com/d/slo-overview"
+        - name: "Error Budget Status"
+          url: "https://grafana.market-data.example.com/d/error-budget"
+
+    # Integration with Incident Management
+    incident_management:
+      enabled: true
+      escalation_policies:
+        - name: "slo_violation_critical"
+          triggers:
+            - "slo_violation AND severity=critical"
+          actions:
+            - type: "pagerduty"
+              service_key: "XXXXXXXXXXXXXXXXXXXX"
+            - type: "slack"
+              channel: "#incidents"
+            - type: "email"
+              recipients: ["oncall@market-data.example.com"]
+
+        - name: "error_budget_exhaustion"
+          triggers:
+            - "error_budget_remaining < 10%"
+          actions:
+            - type: "slack"
+              channel: "#sre-team"
+            - type: "email"
+              recipients: ["sre-team@market-data.example.com"]
+            - type: "feature_freeze"
+              duration: "24h"

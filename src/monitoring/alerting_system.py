@@ -692,6 +692,16 @@ class AlertingSystem:
             "notification_configs": len(self.notification_configs)
         }
 
+    def get_active_alerts(self) -> List[Dict[str, Any]]:
+        """Get list of currently active alerts
+
+        Returns:
+            List of active alert dictionaries
+        """
+        # Return empty list for now since we don't track active alerts yet
+        # In a full implementation, this would return actual active alerts
+        return []
+
 
 # Global alerting system instance
 alerting_system = AlertingSystem()

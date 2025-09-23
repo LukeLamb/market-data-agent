@@ -138,7 +138,6 @@ async def startup_event():
 
     # Initialize validation engine first (needed by others)
     validation_engine = ValidationEngine()
-    await validation_engine.initialize()
     logger.info("Validation engine initialized")
 
     # Initialize memory manager
@@ -380,26 +379,26 @@ async def get_current_price(
         market_context = await memory_mgr.get_market_context(symbol)
 
         response = {
-                "symbol": price.symbol,
-                "price": price.price,
-                "timestamp": price.timestamp.isoformat(),
-                "volume": price.volume,
-                "bid": price.bid,
-                "ask": price.ask,
-                "source": price.source,
-                "quality_score": price.quality_score,
-                "cached": False,
-                "learning_insights": {
-                    "predicted_quality": predicted_quality,
-                    "source_reputation": source_reputation,
-                    "market_context": market_context
-                }
+            "symbol": price.symbol,
+            "price": price.price,
+            "timestamp": price.timestamp.isoformat(),
+            "volume": price.volume,
+            "bid": price.bid,
+            "ask": price.ask,
+            "source": price.source,
+            "quality_score": price.quality_score,
+            "cached": False,
+            "learning_insights": {
+                "predicted_quality": predicted_quality,
+                "source_reputation": source_reputation,
+                "market_context": market_context
             }
+        }
 
-            # Cache for 30 seconds (real-time data with learning insights)
-            cache_set(cache_key, response, ttl=30)
+        # Cache for 30 seconds (real-time data with learning insights)
+        cache_set(cache_key, response, ttl=30)
 
-            return response
+        return response
 
     except SymbolNotFoundError:
         raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
@@ -801,7 +800,7 @@ async def get_monitoring_dashboard(
         record_counter('monitoring_dashboard_requests', 1, {'layout': layout_name})
 
         with time_operation('dashboard_generation_time', {'layout': layout_name}):
-            dashboard_data = dashboard.generate_dashboard(layout_name)
+            dashboard_data = await dashboard.generate_dashboard(layout_name)
 
         return {
             "success": True,

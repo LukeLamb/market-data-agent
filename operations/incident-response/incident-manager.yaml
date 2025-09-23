@@ -1,0 +1,381 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: incident-response
+  labels:
+    name: incident-response
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incident-response-config
+  namespace: incident-response
+  labels:
+    app: incident-manager
+data:
+  config.yaml: |
+    # Incident Response Configuration for Market Data Agent
+
+    incident_detection:
+      # Automated detection rules
+      detection_rules:
+        - name: "high_error_rate"
+          description: "Detect high error rates across services"
+          condition: |
+            (
+              sum(rate(http_requests_total{code=~"5.."}[5m])) /
+              sum(rate(http_requests_total[5m]))
+            ) > 0.05
+          severity: "critical"
+          duration: "2m"
+          escalation_delay: "5m"
+
+        - name: "service_down"
+          description: "Detect when services are completely down"
+          condition: "up{job=~\"market-data-agent|analytics-agent|kong-proxy\"} == 0"
+          severity: "critical"
+          duration: "1m"
+          escalation_delay: "2m"
+
+        - name: "database_connection_failure"
+          description: "Detect database connectivity issues"
+          condition: "pg_up == 0"
+          severity: "critical"
+          duration: "1m"
+          escalation_delay: "3m"
+
+        - name: "memory_exhaustion"
+          description: "Detect memory exhaustion in pods"
+          condition: |
+            (
+              container_memory_usage_bytes{container!=""} /
+              container_spec_memory_limit_bytes{container!=""} * 100
+            ) > 90
+          severity: "warning"
+          duration: "5m"
+          escalation_delay: "10m"
+
+        - name: "disk_space_critical"
+          description: "Detect critical disk space usage"
+          condition: |
+            (
+              (node_filesystem_size_bytes - node_filesystem_free_bytes) /
+              node_filesystem_size_bytes * 100
+            ) > 85
+          severity: "warning"
+          duration: "5m"
+          escalation_delay: "15m"
+
+        - name: "api_latency_spike"
+          description: "Detect API latency spikes"
+          condition: |
+            histogram_quantile(0.95,
+              sum(rate(kong_request_duration_bucket[5m])) by (le)
+            ) > 2.0
+          severity: "warning"
+          duration: "3m"
+          escalation_delay: "10m"
+
+        - name: "queue_backup"
+          description: "Detect message queue backup"
+          condition: "redis_blocked_clients > 10"
+          severity: "warning"
+          duration: "5m"
+          escalation_delay: "10m"
+
+    # Incident classification and routing
+    incident_classification:
+      severity_levels:
+        critical:
+          description: "Service completely unavailable or data loss"
+          response_time: "5m"
+          escalation_time: "15m"
+          stakeholders: ["oncall", "engineering_manager", "product_manager"]
+          communication_channels: ["pagerduty", "slack_critical", "email"]
+
+        high:
+          description: "Significant service degradation"
+          response_time: "15m"
+          escalation_time: "30m"
+          stakeholders: ["oncall", "engineering_team"]
+          communication_channels: ["slack_incidents", "email"]
+
+        medium:
+          description: "Minor service degradation"
+          response_time: "30m"
+          escalation_time: "2h"
+          stakeholders: ["engineering_team"]
+          communication_channels: ["slack_alerts"]
+
+        low:
+          description: "Potential issues that need investigation"
+          response_time: "4h"
+          escalation_time: "1d"
+          stakeholders: ["engineering_team"]
+          communication_channels: ["slack_monitoring"]
+
+      service_categories:
+        market_data:
+          priority: "critical"
+          owner: "market_data_team"
+          escalation_path: ["market_data_oncall", "engineering_manager"]
+
+        api_gateway:
+          priority: "critical"
+          owner: "platform_team"
+          escalation_path: ["platform_oncall", "engineering_manager"]
+
+        analytics:
+          priority: "high"
+          owner: "analytics_team"
+          escalation_path: ["analytics_oncall", "product_manager"]
+
+        infrastructure:
+          priority: "high"
+          owner: "platform_team"
+          escalation_path: ["platform_oncall", "sre_team"]
+
+    # Automated response actions
+    automated_responses:
+      - name: "restart_failed_pods"
+        description: "Restart pods that are in CrashLoopBackOff"
+        triggers:
+          - "kube_pod_container_status_restarts_total > 5"
+        actions:
+          - type: "kubectl"
+            command: "delete pod"
+            selector: "status.phase=Failed"
+            namespace: "market-data"
+          - type: "slack"
+            message: "Automatically restarted failed pods in market-data namespace"
+
+      - name: "scale_up_on_high_load"
+        description: "Scale up services under high load"
+        triggers:
+          - "cpu_usage_percent > 80"
+          - "memory_usage_percent > 80"
+        actions:
+          - type: "hpa_scale"
+            target_replicas: "+2"
+            max_replicas: 20
+          - type: "slack"
+            message: "Auto-scaled {{ .service }} due to high resource usage"
+
+      - name: "circuit_breaker_activation"
+        description: "Activate circuit breakers for failing downstream services"
+        triggers:
+          - "downstream_error_rate > 50%"
+        actions:
+          - type: "kong_plugin"
+            plugin: "circuit-breaker"
+            action: "enable"
+          - type: "alert"
+            message: "Circuit breaker activated for {{ .service }}"
+
+      - name: "failover_to_backup"
+        description: "Failover to backup systems"
+        triggers:
+          - "primary_service_availability < 50%"
+        actions:
+          - type: "dns_switch"
+            from: "primary.market-data.com"
+            to: "backup.market-data.com"
+          - type: "pagerduty"
+            message: "Initiated failover to backup systems"
+
+    # Runbook automation
+    runbooks:
+      - name: "database_connection_failure"
+        description: "Handle database connection failures"
+        triggers:
+          - "pg_up == 0"
+        steps:
+          - name: "check_database_status"
+            type: "kubectl"
+            command: "get pods -l app=postgresql -n market-data"
+            timeout: "30s"
+
+          - name: "restart_database_if_needed"
+            type: "kubectl"
+            command: "rollout restart deployment/postgresql -n market-data"
+            condition: "previous_step.failed"
+            timeout: "60s"
+
+          - name: "verify_connection"
+            type: "curl"
+            url: "http://market-data-agent.market-data.svc.cluster.local:8080/health/db"
+            retry: 3
+            timeout: "10s"
+
+          - name: "notify_if_failed"
+            type: "pagerduty"
+            condition: "previous_step.failed"
+            message: "Database restart failed - manual intervention required"
+
+      - name: "high_memory_usage"
+        description: "Handle high memory usage scenarios"
+        triggers:
+          - "memory_usage_percent > 90"
+        steps:
+          - name: "identify_memory_hogs"
+            type: "prometheus_query"
+            query: |
+              topk(5, container_memory_usage_bytes{container!=""})
+            timeout: "30s"
+
+          - name: "restart_high_memory_pods"
+            type: "kubectl"
+            command: "delete pod {{ .pod_name }} -n {{ .namespace }}"
+            condition: "memory_usage > threshold"
+            timeout: "60s"
+
+          - name: "scale_up_if_needed"
+            type: "hpa_scale"
+            target_replicas: "+1"
+            condition: "cpu_usage > 70%"
+
+      - name: "api_latency_spike"
+        description: "Handle API latency spikes"
+        triggers:
+          - "api_p95_latency > 2000ms"
+        steps:
+          - name: "check_upstream_health"
+            type: "curl"
+            url: "http://kong-admin.kong.svc.cluster.local:8001/upstreams"
+            timeout: "10s"
+
+          - name: "enable_caching"
+            type: "kong_plugin"
+            plugin: "proxy-cache"
+            action: "enable"
+            ttl: "300s"
+
+          - name: "scale_backend_services"
+            type: "hpa_scale"
+            target_replicas: "+2"
+            services: ["market-data-agent", "analytics-agent"]
+
+    # Communication templates
+    communication:
+      templates:
+        incident_created:
+          subject: "[INCIDENT] {{ .severity | upper }} - {{ .title }}"
+          body: |
+            **Incident Details:**
+            - **ID:** {{ .incident_id }}
+            - **Severity:** {{ .severity }}
+            - **Service:** {{ .service }}
+            - **Description:** {{ .description }}
+            - **Started:** {{ .start_time }}
+
+            **Automatic Actions Taken:**
+            {{ range .actions }}
+            - {{ .description }}
+            {{ end }}
+
+            **Next Steps:**
+            {{ .next_steps }}
+
+            **War Room:** {{ .war_room_link }}
+
+        incident_resolved:
+          subject: "[RESOLVED] {{ .title }}"
+          body: |
+            **Incident Resolved:**
+            - **ID:** {{ .incident_id }}
+            - **Duration:** {{ .duration }}
+            - **Root Cause:** {{ .root_cause }}
+            - **Resolution:** {{ .resolution }}
+
+            **Post-Incident Review:** {{ .pir_link }}
+
+        escalation:
+          subject: "[ESCALATION] {{ .severity | upper }} - {{ .title }}"
+          body: |
+            **Incident Escalation:**
+            - **ID:** {{ .incident_id }}
+            - **Time Since Started:** {{ .elapsed_time }}
+            - **Current Status:** {{ .status }}
+            - **Escalation Reason:** {{ .escalation_reason }}
+
+            **Immediate Action Required**
+
+    # Integration endpoints
+    integrations:
+      pagerduty:
+        enabled: true
+        api_endpoint: "https://events.pagerduty.com/v2/enqueue"
+        service_key_secret: "pagerduty-service-key"
+
+      slack:
+        enabled: true
+        webhook_url_secret: "slack-webhook-url"
+        channels:
+          critical: "#incidents-critical"
+          high: "#incidents"
+          medium: "#alerts"
+          low: "#monitoring"
+
+      jira:
+        enabled: true
+        endpoint: "https://market-data.atlassian.net"
+        project_key: "INC"
+        issue_type: "Incident"
+
+      grafana:
+        enabled: true
+        endpoint: "https://grafana.market-data.example.com"
+        api_key_secret: "grafana-api-key"
+
+    # Metrics and reporting
+    metrics:
+      enabled: true
+      retention: "90d"
+
+      tracked_metrics:
+        - "incident_count_total"
+        - "incident_duration_seconds"
+        - "mttr_seconds"
+        - "mtbf_seconds"
+        - "escalation_count_total"
+        - "automated_resolution_count_total"
+
+      reports:
+        daily:
+          schedule: "0 9 * * *"
+          recipients: ["sre-team@market-data.example.com"]
+          format: "summary"
+
+        weekly:
+          schedule: "0 9 * * 1"
+          recipients: ["engineering@market-data.example.com"]
+          format: "detailed"
+
+        monthly:
+          schedule: "0 9 1 * *"
+          recipients: ["leadership@market-data.example.com"]
+          format: "executive"
+
+    # Self-healing configuration
+    self_healing:
+      enabled: true
+      confidence_threshold: 0.8  # Only take action if 80% confident
+      max_actions_per_hour: 10
+
+      healing_actions:
+        - name: "pod_restart"
+          confidence_threshold: 0.9
+          max_per_hour: 5
+
+        - name: "service_scale"
+          confidence_threshold: 0.7
+          max_per_hour: 3
+
+        - name: "circuit_breaker"
+          confidence_threshold: 0.8
+          max_per_hour: 2
+
+      learning:
+        enabled: true
+        feedback_sources: ["human_operators", "post_incident_reviews"]
+        model_update_frequency: "weekly"

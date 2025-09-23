@@ -1,0 +1,608 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cost-optimization-config
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+    component: cost-optimization
+data:
+  config.yaml: |
+    # Cost Optimization Configuration for Market Data Agent
+
+    cost_optimization:
+      # Cost tracking and analysis
+      cost_tracking:
+        cloud_provider: "aws"
+        billing_account: "123456789012"
+        cost_allocation_tags:
+          - "Environment"
+          - "Service"
+          - "Team"
+          - "CostCenter"
+
+        cost_categories:
+          compute:
+            ec2_instances: true
+            kubernetes_nodes: true
+            lambda_functions: true
+            fargate_tasks: true
+
+          storage:
+            ebs_volumes: true
+            s3_buckets: true
+            efs_volumes: true
+
+          networking:
+            load_balancers: true
+            data_transfer: true
+            nat_gateways: true
+
+          databases:
+            rds_instances: true
+            elasticache: true
+            dynamodb: true
+
+      # Optimization strategies
+      optimization_strategies:
+        right_sizing:
+          enabled: true
+          cpu_utilization_threshold: 20  # Scale down if under 20%
+          memory_utilization_threshold: 30
+          observation_period: "14d"
+          confidence_threshold: 0.8
+
+        spot_instances:
+          enabled: true
+          max_interruption_rate: 0.05
+          suitable_workloads:
+            - "analytics-batch"
+            - "data-processing"
+            - "ml-training"
+          savings_threshold: 0.5  # Use spot if 50%+ savings
+
+        reserved_instances:
+          enabled: true
+          planning_horizon: "1y"
+          utilization_threshold: 0.75
+          commitment_threshold: 0.6  # Purchase if 60%+ utilization
+
+        storage_optimization:
+          enabled: true
+          lifecycle_policies:
+            - name: "log_archival"
+              transition_days: 30
+              storage_class: "IA"
+            - name: "old_data_glacier"
+              transition_days: 90
+              storage_class: "GLACIER"
+
+        unused_resources:
+          enabled: true
+          detection_rules:
+            - name: "orphaned_volumes"
+              resource: "ebs_volume"
+              condition: "state=available AND age>7d"
+            - name: "idle_load_balancers"
+              resource: "load_balancer"
+              condition: "request_count=0 AND age>7d"
+            - name: "unused_elastic_ips"
+              resource: "elastic_ip"
+              condition: "not_associated AND age>1d"
+
+      # Automated actions
+      automated_actions:
+        enabled: true
+        dry_run_mode: false  # Set to true for testing
+        approval_required: true
+        actions:
+          - name: "scale_down_underutilized"
+            trigger: "cpu_utilization < 20% AND memory_utilization < 30%"
+            action: "reduce_replicas"
+            max_reduction: 0.5  # Don't reduce by more than 50%
+            confirmation_required: false
+
+          - name: "terminate_idle_instances"
+            trigger: "cpu_utilization < 5% AND duration > 4h"
+            action: "terminate_instance"
+            confirmation_required: true
+
+          - name: "migrate_to_spot"
+            trigger: "workload_suitable AND spot_savings > 50%"
+            action: "convert_to_spot"
+            confirmation_required: true
+
+          - name: "purchase_reserved_instances"
+            trigger: "utilization > 75% AND duration > 30d"
+            action: "purchase_ri"
+            confirmation_required: true
+
+      # Cost alerting and budgets
+      budgets:
+        monthly_compute_budget:
+          amount: 10000  # USD
+          alert_thresholds: [50, 80, 95, 100]
+          scope: "compute"
+
+        monthly_total_budget:
+          amount: 15000  # USD
+          alert_thresholds: [50, 80, 90, 100]
+          scope: "all"
+
+        service_budgets:
+          market_data_service:
+            amount: 5000
+            alert_thresholds: [80, 100]
+          analytics_service:
+            amount: 3000
+            alert_thresholds: [80, 100]
+          api_gateway:
+            amount: 2000
+            alert_thresholds: [80, 100]
+
+      # Recommendations engine
+      recommendations:
+        enabled: true
+        analysis_period: "30d"
+        recommendation_types:
+          - "right_sizing"
+          - "spot_migration"
+          - "reserved_instance_purchase"
+          - "storage_optimization"
+          - "resource_cleanup"
+
+        scoring:
+          potential_savings_weight: 0.4
+          implementation_effort_weight: 0.3
+          risk_level_weight: 0.2
+          business_impact_weight: 0.1
+
+        filters:
+          min_savings_amount: 100  # USD per month
+          min_savings_percentage: 10  # 10% savings
+          max_risk_level: "medium"
+
+      # Multi-cloud cost optimization
+      multi_cloud:
+        enabled: false
+        providers: ["aws", "azure", "gcp"]
+        cost_comparison: true
+        workload_placement_optimization: true
+
+      # FinOps integration
+      finops:
+        chargeback_enabled: true
+        cost_allocation_method: "proportional"
+        showback_reports: true
+        cost_center_mapping:
+          engineering: ["market-data", "analytics", "platform"]
+          product: ["user-interface", "customer-api"]
+          operations: ["monitoring", "security", "infrastructure"]
+
+    # Integration with external cost management tools
+    integrations:
+      aws_cost_explorer:
+        enabled: true
+        api_endpoint: "https://ce.us-east-1.amazonaws.com"
+        granularity: "DAILY"
+        metrics: ["BlendedCost", "UnblendedCost", "UsageQuantity"]
+
+      aws_budgets:
+        enabled: true
+        notification_endpoint: "arn:aws:sns:us-east-1:123456789012:cost-alerts"
+
+      cloudhealth:
+        enabled: false
+        api_endpoint: "https://chapi.cloudhealthtech.com"
+
+      cloudability:
+        enabled: false
+        api_endpoint: "https://api.cloudability.com"
+
+      kubecost:
+        enabled: true
+        endpoint: "http://kubecost-cost-analyzer.kubecost:9090"
+
+    # Reporting and dashboards
+    reporting:
+      schedule:
+        daily_spend: "0 8 * * *"
+        weekly_optimization: "0 8 * * 1"
+        monthly_summary: "0 8 1 * *"
+
+      recipients:
+        finance_team: ["finance@market-data.example.com"]
+        engineering_managers: ["eng-managers@market-data.example.com"]
+        executives: ["executives@market-data.example.com"]
+
+      dashboards:
+        - name: "Cost Overview"
+          metrics: ["total_spend", "trend", "budget_status"]
+          refresh: "1h"
+
+        - name: "Optimization Opportunities"
+          metrics: ["savings_potential", "recommendations", "actions_taken"]
+          refresh: "24h"
+
+        - name: "Resource Utilization"
+          metrics: ["cpu_efficiency", "memory_efficiency", "storage_efficiency"]
+          refresh: "1h"
+
+    # Machine learning for cost prediction
+    ml_cost_prediction:
+      enabled: true
+      models:
+        monthly_forecast:
+          algorithm: "prophet"
+          features: ["historical_spend", "usage_trends", "seasonality"]
+          horizon: "3m"
+
+        anomaly_detection:
+          algorithm: "isolation_forest"
+          sensitivity: 0.1
+          features: ["daily_spend", "resource_usage", "request_volume"]
+
+      training:
+        data_period: "12m"
+        retrain_frequency: "weekly"
+        validation_split: 0.2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cost-optimizer
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+    component: cost-optimization
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cost-optimizer
+  template:
+    metadata:
+      labels:
+        app: cost-optimizer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9096"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: cost-optimizer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10007
+        runAsGroup: 10007
+        fsGroup: 10007
+      containers:
+      - name: cost-optimizer
+        image: market-data/cost-optimizer:1.0.0
+        ports:
+        - name: http
+          containerPort: 8097
+          protocol: TCP
+        - name: metrics
+          containerPort: 9096
+          protocol: TCP
+        env:
+        - name: CONFIG_FILE
+          value: "/etc/config/cost/config.yaml"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: PROMETHEUS_URL
+          value: "http://prometheus.monitoring.svc.cluster.local:9090"
+        - name: KUBECOST_URL
+          value: "http://kubecost-cost-analyzer.kubecost:9090"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config/cost
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets/cost
+          readOnly: true
+        - name: cache-storage
+          mountPath: /var/lib/cost-optimizer/cache
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8097
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8097
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: cost-optimization-config
+      - name: secrets
+        secret:
+          secretName: cost-optimization-secrets
+          defaultMode: 0400
+      - name: cache-storage
+        emptyDir:
+          sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cost-optimizer
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8097
+    protocol: TCP
+  - name: metrics
+    port: 9096
+    targetPort: 9096
+    protocol: TCP
+  selector:
+    app: cost-optimizer
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cost-optimizer
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cost-optimizer
+  labels:
+    app: cost-optimizer
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "services", "persistentvolumes", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cost-optimizer
+  labels:
+    app: cost-optimizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cost-optimizer
+subjects:
+- kind: ServiceAccount
+  name: cost-optimizer
+  namespace: capacity-planning
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cost-optimization-secrets
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+type: Opaque
+data:
+  aws-access-key: QVdTX0FDQ0VTU19LRVlfSEVSRQ== # AWS_ACCESS_KEY_HERE
+  aws-secret-key: QVdTX1NFQ1JFVF9LRVlfSEVSRQ== # AWS_SECRET_KEY_HERE
+  slack-webhook: U0xBQ0tfV0VCSE9PS19IRVJF # SLACK_WEBHOOK_HERE
+  grafana-api-key: R1JBRkFOQV9BUElfS0VZX0hFUkU= # GRAFANA_API_KEY_HERE
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cost-analysis-job
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+    component: cost-analysis
+spec:
+  schedule: "0 6 * * *"  # Daily at 6 AM
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: cost-optimizer
+            component: cost-analysis
+        spec:
+          serviceAccountName: cost-optimizer
+          restartPolicy: OnFailure
+          containers:
+          - name: cost-analyzer
+            image: market-data/cost-analyzer:1.0.0
+            env:
+            - name: CONFIG_FILE
+              value: "/etc/config/cost/config.yaml"
+            - name: ANALYSIS_PERIOD
+              value: "7d"
+            - name: OUTPUT_FORMAT
+              value: "json,html"
+            volumeMounts:
+            - name: config
+              mountPath: /etc/config/cost
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/secrets/cost
+              readOnly: true
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 2Gi
+              requests:
+                cpu: 500m
+                memory: 1Gi
+          volumes:
+          - name: config
+            configMap:
+              name: cost-optimization-config
+          - name: secrets
+            secret:
+              secretName: cost-optimization-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unused-resource-cleanup
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+    component: resource-cleanup
+spec:
+  schedule: "0 2 * * 0"  # Weekly on Sunday at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: cost-optimizer
+            component: resource-cleanup
+        spec:
+          serviceAccountName: cost-optimizer
+          restartPolicy: OnFailure
+          containers:
+          - name: resource-cleaner
+            image: market-data/resource-cleaner:1.0.0
+            env:
+            - name: CONFIG_FILE
+              value: "/etc/config/cost/config.yaml"
+            - name: DRY_RUN
+              value: "false"
+            - name: CONFIRM_DELETIONS
+              value: "true"
+            volumeMounts:
+            - name: config
+              mountPath: /etc/config/cost
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/secrets/cost
+              readOnly: true
+            resources:
+              limits:
+                cpu: 500m
+                memory: 1Gi
+              requests:
+                cpu: 200m
+                memory: 512Mi
+          volumes:
+          - name: config
+            configMap:
+              name: cost-optimization-config
+          - name: secrets
+            secret:
+              secretName: cost-optimization-secrets
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cost-optimization-alerts
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+  - name: cost.optimization
+    interval: 1h
+    rules:
+    - alert: CostBudgetExceeded
+      expr: |
+        cost_budget_usage_percentage > 100
+      for: 0m
+      labels:
+        severity: critical
+        category: cost
+      annotations:
+        summary: "Cost budget exceeded for {{ $labels.budget_name }}"
+        description: "Budget {{ $labels.budget_name }} has exceeded 100% of allocated amount"
+
+    - alert: CostBudgetWarning
+      expr: |
+        cost_budget_usage_percentage > 80
+      for: 30m
+      labels:
+        severity: warning
+        category: cost
+      annotations:
+        summary: "Cost budget warning for {{ $labels.budget_name }}"
+        description: "Budget {{ $labels.budget_name }} has exceeded 80% of allocated amount"
+
+    - alert: UnusedResourcesDetected
+      expr: |
+        unused_resources_count > 5
+      for: 24h
+      labels:
+        severity: warning
+        category: cost
+      annotations:
+        summary: "Unused resources detected"
+        description: "{{ $value }} unused resources detected that could be cleaned up"
+
+    - alert: CostAnomalyDetected
+      expr: |
+        cost_anomaly_score > 0.8
+      for: 1h
+      labels:
+        severity: warning
+        category: cost
+      annotations:
+        summary: "Cost anomaly detected"
+        description: "Unusual spending pattern detected with anomaly score {{ $value }}"
+
+    - alert: OptimizationOpportunity
+      expr: |
+        potential_monthly_savings > 1000
+      for: 6h
+      labels:
+        severity: info
+        category: cost
+      annotations:
+        summary: "Significant cost optimization opportunity"
+        description: "Potential monthly savings of ${{ $value }} identified"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cost-optimization-metrics
+  namespace: capacity-planning
+  labels:
+    app: cost-optimizer
+spec:
+  selector:
+    matchLabels:
+      app: cost-optimizer
+  endpoints:
+  - port: metrics
+    interval: 60s
+    path: /metrics

@@ -1,0 +1,675 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: disaster-recovery
+  labels:
+    name: disaster-recovery
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: disaster-recovery-config
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+data:
+  config.yaml: |
+    # Disaster Recovery Configuration for Market Data Agent
+
+    disaster_recovery:
+      # RTO and RPO targets
+      objectives:
+        rto_target: "4h"  # Recovery Time Objective
+        rpo_target: "1h"  # Recovery Point Objective
+
+        service_priorities:
+          critical:
+            services: ["market-data-agent", "api-gateway", "database"]
+            rto: "1h"
+            rpo: "15m"
+
+          high:
+            services: ["analytics-agent", "monitoring"]
+            rto: "4h"
+            rpo: "1h"
+
+          medium:
+            services: ["reporting", "batch-processing"]
+            rto: "8h"
+            rpo: "4h"
+
+      # Backup strategies
+      backup:
+        databases:
+          postgresql:
+            method: "pg_dump"
+            frequency: "hourly"
+            retention: "30d"
+            compression: true
+            encryption: true
+            storage_location: "s3://market-data-backups/postgresql/"
+
+          redis:
+            method: "rdb_snapshot"
+            frequency: "30m"
+            retention: "7d"
+            storage_location: "s3://market-data-backups/redis/"
+
+        persistent_volumes:
+          method: "ebs_snapshot"
+          frequency: "6h"
+          retention: "14d"
+          cross_region: true
+          target_regions: ["us-west-2", "us-east-2"]
+
+        application_state:
+          method: "velero"
+          frequency: "daily"
+          retention: "30d"
+          include_cluster_resources: true
+
+        configuration:
+          method: "git_backup"
+          frequency: "hourly"
+          repositories: ["kubernetes-configs", "terraform-state", "ansible-playbooks"]
+
+      # Multi-region deployment
+      regions:
+        primary:
+          name: "us-east-1"
+          type: "active"
+          capacity: "100%"
+
+        secondary:
+          name: "us-west-2"
+          type: "standby"
+          capacity: "50%"
+
+        tertiary:
+          name: "us-east-2"
+          type: "cold"
+          capacity: "0%"
+
+      # Failover procedures
+      failover:
+        automated:
+          enabled: true
+          triggers:
+            - "region_unavailable"
+            - "primary_cluster_down > 15m"
+            - "data_corruption_detected"
+
+          actions:
+            - name: "dns_switch"
+              priority: 1
+              description: "Switch DNS to secondary region"
+
+            - name: "start_secondary_services"
+              priority: 2
+              description: "Start services in secondary region"
+
+            - name: "restore_data"
+              priority: 3
+              description: "Restore data from latest backup"
+
+            - name: "validate_services"
+              priority: 4
+              description: "Validate all services are operational"
+
+        manual:
+          confirmation_required: true
+          approval_chain: ["sre_lead", "engineering_manager"]
+
+          procedures:
+            - name: "planned_failover"
+              description: "Planned maintenance failover"
+              downtime_estimate: "30m"
+
+            - name: "emergency_failover"
+              description: "Emergency disaster failover"
+              downtime_estimate: "2h"
+
+      # Data replication
+      replication:
+        database:
+          postgresql:
+            method: "streaming_replication"
+            replicas: 2
+            regions: ["us-west-2"]
+            lag_threshold: "5s"
+
+        object_storage:
+          s3:
+            method: "cross_region_replication"
+            target_bucket: "market-data-backups-west"
+            storage_class: "STANDARD_IA"
+
+        message_queues:
+          redis:
+            method: "cluster_replication"
+            replicas: 1
+            regions: ["us-west-2"]
+
+      # Recovery procedures
+      recovery:
+        database_recovery:
+          steps:
+            - name: "assess_corruption"
+              timeout: "10m"
+
+            - name: "stop_applications"
+              timeout: "5m"
+
+            - name: "restore_from_backup"
+              timeout: "30m"
+
+            - name: "verify_integrity"
+              timeout: "15m"
+
+            - name: "start_applications"
+              timeout: "10m"
+
+        full_site_recovery:
+          steps:
+            - name: "activate_secondary_region"
+              timeout: "15m"
+
+            - name: "restore_infrastructure"
+              timeout: "60m"
+
+            - name: "restore_applications"
+              timeout: "45m"
+
+            - name: "restore_data"
+              timeout: "120m"
+
+            - name: "validate_functionality"
+              timeout: "30m"
+
+      # Testing and validation
+      dr_testing:
+        schedule:
+          full_dr_test: "quarterly"
+          partial_test: "monthly"
+          backup_restore_test: "weekly"
+
+        test_scenarios:
+          - name: "primary_region_failure"
+            description: "Complete primary region unavailability"
+            frequency: "quarterly"
+
+          - name: "database_corruption"
+            description: "Database corruption requiring restore"
+            frequency: "monthly"
+
+          - name: "network_partition"
+            description: "Network connectivity issues"
+            frequency: "monthly"
+
+          - name: "security_breach"
+            description: "Security incident requiring isolation"
+            frequency: "quarterly"
+
+        automation:
+          enabled: true
+          non_production_only: true
+          rollback_timeout: "2h"
+
+      # Communication plan
+      communication:
+        incident_channels:
+          primary: "#disaster-recovery"
+          executive: "#executive-alerts"
+          customers: "status.market-data.example.com"
+
+        notification_templates:
+          dr_initiated:
+            subject: "[DR] Disaster Recovery Initiated"
+            urgency: "high"
+
+          dr_completed:
+            subject: "[DR] Disaster Recovery Completed"
+            urgency: "normal"
+
+          dr_test:
+            subject: "[DR TEST] Disaster Recovery Test in Progress"
+            urgency: "low"
+
+        stakeholders:
+          executives: ["ceo@market-data.example.com", "cto@market-data.example.com"]
+          operations: ["sre-team@market-data.example.com"]
+          business: ["operations@market-data.example.com"]
+          customers: ["support@market-data.example.com"]
+
+    # Integration with external systems
+    integrations:
+      backup_storage:
+        aws_s3:
+          primary_bucket: "market-data-backups"
+          secondary_bucket: "market-data-backups-west"
+          encryption: "AES256"
+
+      monitoring:
+        prometheus:
+          endpoint: "http://prometheus.monitoring.svc.cluster.local:9090"
+
+        grafana:
+          endpoint: "https://grafana.market-data.example.com"
+          dashboard_id: "disaster-recovery"
+
+      dns_management:
+        route53:
+          hosted_zone: "market-data.example.com"
+          failover_records: ["api", "admin", "status"]
+
+      notification:
+        pagerduty:
+          service_key: "DR_SERVICE_KEY"
+          escalation_policy: "disaster-recovery"
+
+        slack:
+          webhook_url: "SLACK_WEBHOOK_URL"
+          channels: ["#disaster-recovery", "#executive-alerts"]
+
+      external_dependencies:
+        third_party_apis:
+          - name: "market_data_provider"
+            criticality: "critical"
+            backup_provider: "secondary_market_data"
+
+          - name: "payment_processor"
+            criticality: "high"
+            backup_provider: "backup_payment"
+
+    # Compliance and audit
+    compliance:
+      frameworks: ["SOC2", "ISO27001"]
+
+      audit_requirements:
+        backup_verification: "daily"
+        recovery_testing: "quarterly"
+        documentation_review: "annually"
+
+      reporting:
+        rto_rpo_metrics: "monthly"
+        test_results: "quarterly"
+        compliance_status: "annually"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dr-orchestrator
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+    component: disaster-recovery
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dr-orchestrator
+  template:
+    metadata:
+      labels:
+        app: dr-orchestrator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9097"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: dr-orchestrator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10008
+        runAsGroup: 10008
+        fsGroup: 10008
+      containers:
+      - name: dr-orchestrator
+        image: market-data/dr-orchestrator:1.0.0
+        ports:
+        - name: http
+          containerPort: 8098
+          protocol: TCP
+        - name: metrics
+          containerPort: 9097
+          protocol: TCP
+        env:
+        - name: CONFIG_FILE
+          value: "/etc/config/dr/config.yaml"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: PROMETHEUS_URL
+          value: "http://prometheus.monitoring.svc.cluster.local:9090"
+        - name: KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config/dr
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets/dr
+          readOnly: true
+        - name: backup-cache
+          mountPath: /var/lib/dr-orchestrator/cache
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8098
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8098
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: disaster-recovery-config
+      - name: secrets
+        secret:
+          secretName: disaster-recovery-secrets
+          defaultMode: 0400
+      - name: backup-cache
+        emptyDir:
+          sizeLimit: 10Gi
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - dr-orchestrator
+            topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dr-orchestrator
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8098
+    protocol: TCP
+  - name: metrics
+    port: 9097
+    targetPort: 9097
+    protocol: TCP
+  selector:
+    app: dr-orchestrator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dr-orchestrator
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dr-orchestrator
+  labels:
+    app: dr-orchestrator
+rules:
+# Full cluster access for disaster recovery operations
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+# Special permissions for cross-namespace operations
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dr-orchestrator
+  labels:
+    app: dr-orchestrator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dr-orchestrator
+subjects:
+- kind: ServiceAccount
+  name: dr-orchestrator
+  namespace: disaster-recovery
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: disaster-recovery-secrets
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+type: Opaque
+data:
+  aws-access-key: QVdTX0FDQ0VTU19LRVlfSEVSRQ== # AWS_ACCESS_KEY_HERE
+  aws-secret-key: QVdTX1NFQ1JFVF9LRVlfSEVSRQ== # AWS_SECRET_KEY_HERE
+  pagerduty-token: UERfVE9LRU5fSEVSRQ== # PD_TOKEN_HERE
+  slack-webhook: U0xBQ0tfV0VCSE9PS19IRVJF # SLACK_WEBHOOK_HERE
+  route53-access-key: Uk9VVEU1M19BQ0NFU1NfS0VZX0hFUkU= # ROUTE53_ACCESS_KEY_HERE
+  backup-encryption-key: QkFDS1VQX0VOQ1JZUFRJT05fS0VZX0hFUkU= # BACKUP_ENCRYPTION_KEY_HERE
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-backup-validation
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+    component: backup-validation
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: dr-orchestrator
+            component: backup-validation
+        spec:
+          serviceAccountName: dr-orchestrator
+          restartPolicy: OnFailure
+          containers:
+          - name: backup-validator
+            image: market-data/backup-validator:1.0.0
+            env:
+            - name: CONFIG_FILE
+              value: "/etc/config/dr/config.yaml"
+            - name: VALIDATION_TYPE
+              value: "integrity_check"
+            volumeMounts:
+            - name: config
+              mountPath: /etc/config/dr
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/secrets/dr
+              readOnly: true
+            resources:
+              limits:
+                cpu: 500m
+                memory: 1Gi
+              requests:
+                cpu: 200m
+                memory: 512Mi
+          volumes:
+          - name: config
+            configMap:
+              name: disaster-recovery-config
+          - name: secrets
+            secret:
+              secretName: disaster-recovery-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-test-automation
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+    component: dr-testing
+spec:
+  schedule: "0 2 1 * *"  # Monthly on the 1st at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: dr-orchestrator
+            component: dr-testing
+        spec:
+          serviceAccountName: dr-orchestrator
+          restartPolicy: OnFailure
+          containers:
+          - name: dr-tester
+            image: market-data/dr-tester:1.0.0
+            env:
+            - name: CONFIG_FILE
+              value: "/etc/config/dr/config.yaml"
+            - name: TEST_ENVIRONMENT
+              value: "staging"
+            - name: TEST_SCENARIO
+              value: "partial_failover"
+            volumeMounts:
+            - name: config
+              mountPath: /etc/config/dr
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/secrets/dr
+              readOnly: true
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 2Gi
+              requests:
+                cpu: 500m
+                memory: 1Gi
+          volumes:
+          - name: config
+            configMap:
+              name: disaster-recovery-config
+          - name: secrets
+            secret:
+              secretName: disaster-recovery-secrets
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: disaster-recovery-alerts
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+  - name: disaster.recovery
+    interval: 1m
+    rules:
+    - alert: BackupFailed
+      expr: |
+        backup_job_status{status="failed"} == 1
+      for: 1m
+      labels:
+        severity: critical
+        category: disaster-recovery
+      annotations:
+        summary: "Backup job failed for {{ $labels.service }}"
+        description: "Backup job for {{ $labels.service }} failed - RPO at risk"
+
+    - alert: ReplicationLagHigh
+      expr: |
+        database_replication_lag_seconds > 300
+      for: 5m
+      labels:
+        severity: warning
+        category: disaster-recovery
+      annotations:
+        summary: "Database replication lag is high"
+        description: "Replication lag is {{ $value }}s, exceeding 5-minute threshold"
+
+    - alert: DRTestFailed
+      expr: |
+        dr_test_success == 0
+      for: 0m
+      labels:
+        severity: critical
+        category: disaster-recovery
+      annotations:
+        summary: "Disaster recovery test failed"
+        description: "Last DR test failed - recovery capabilities may be compromised"
+
+    - alert: BackupStorageUnreachable
+      expr: |
+        backup_storage_available == 0
+      for: 5m
+      labels:
+        severity: critical
+        category: disaster-recovery
+      annotations:
+        summary: "Backup storage unreachable"
+        description: "Cannot access backup storage - new backups will fail"
+
+    - alert: RPOViolation
+      expr: |
+        time() - last_successful_backup_timestamp > 3600
+      for: 0m
+      labels:
+        severity: critical
+        category: disaster-recovery
+      annotations:
+        summary: "RPO violation detected"
+        description: "Last successful backup was {{ $value | humanizeDuration }} ago"
+
+    - alert: CrossRegionReplicationDown
+      expr: |
+        cross_region_replication_status == 0
+      for: 10m
+      labels:
+        severity: critical
+        category: disaster-recovery
+      annotations:
+        summary: "Cross-region replication is down"
+        description: "Cross-region replication is not functioning - disaster recovery capabilities degraded"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: disaster-recovery-metrics
+  namespace: disaster-recovery
+  labels:
+    app: dr-orchestrator
+spec:
+  selector:
+    matchLabels:
+      app: dr-orchestrator
+  endpoints:
+  - port: metrics
+    interval: 60s
+    path: /metrics

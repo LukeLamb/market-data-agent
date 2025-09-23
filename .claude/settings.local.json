@@ -20,7 +20,13 @@
       "Bash(python:*)",
       "Bash(pytest:*)",
       "Bash(del test_source_manager_integration.py)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "Bash(tasklist)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(pkill:*)",
+      "Bash(git reset:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
