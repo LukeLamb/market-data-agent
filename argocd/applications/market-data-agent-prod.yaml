@@ -1,0 +1,194 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: market-data-agent-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: market-data-agent
+    app.kubernetes.io/component: argocd-application
+    app.kubernetes.io/part-of: market-data-platform
+    environment: production
+  annotations:
+    argocd.argoproj.io/app-description: "Market Data Agent - Production Environment"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: market-data-prod-alerts
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: market-data-prod-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: market-data-prod-alerts
+    notifications.argoproj.io/subscribe.on-deployed.email: ops@marketdata.com
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: market-data-platform
+
+  source:
+    repoURL: https://github.com/LukeLamb/market-data-agent.git
+    targetRevision: HEAD  # Use releases/tags for production
+    path: helm/market-data-agent
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+      parameters:
+        - name: config.app.environment
+          value: production
+        - name: replicaCount
+          value: "3"
+        - name: resources.requests.cpu
+          value: 500m
+        - name: resources.requests.memory
+          value: 1Gi
+        - name: resources.limits.cpu
+          value: "2"
+        - name: resources.limits.memory
+          value: 4Gi
+        - name: postgresql.enabled
+          value: "false"  # Use external managed database
+        - name: redis.enabled
+          value: "false"   # Use external managed Redis
+        - name: autoscaling.enabled
+          value: "true"
+        - name: autoscaling.minReplicas
+          value: "3"
+        - name: autoscaling.maxReplicas
+          value: "10"
+        - name: ingress.enabled
+          value: "true"
+        - name: ingress.hosts[0].host
+          value: api.marketdata.com
+        - name: ingress.tls[0].secretName
+          value: marketdata-tls
+      values: |
+        # Production specific overrides
+        config:
+          app:
+            debug: false
+          logging:
+            level: INFO
+          database:
+            pool_size: 30
+            max_overflow: 50
+          monitoring:
+            prometheus:
+              enabled: true
+
+        persistence:
+          enabled: true
+          size: 100Gi
+          storageClass: fast-ssd
+
+        # External database configuration
+        secrets:
+          database_url: "postgresql://prod-user:password@prod-timescaledb:5432/market_data"
+          redis_url: "redis://prod-redis-cluster:6379/0"
+
+        # Security configurations
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+
+        containerSecurityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+
+        # High availability settings
+        podDisruptionBudget:
+          enabled: true
+          minAvailable: 2
+
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - market-data-agent
+                topologyKey: kubernetes.io/hostname
+
+        # Monitoring and metrics
+        metrics:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+            namespace: monitoring
+            interval: 15s
+
+        # Network policies
+        networkPolicy:
+          enabled: true
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      name: ingress-nginx
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      name: monitoring
+
+        # Resource quotas and limits
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: market-data-prod
+
+  syncPolicy:
+    # Manual sync for production - no automated deployments
+    automated: {}
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 2
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+
+  revisionHistoryLimit: 50
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: ""
+      kind: Secret
+      name: sh.helm.release.v1.*
+      jsonPointers:
+        - /data
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/metrics
+
+  info:
+    - name: Environment
+      value: Production
+    - name: Repository
+      value: https://github.com/LukeLamb/market-data-agent
+    - name: Documentation
+      value: https://docs.marketdata.com
+    - name: Monitoring
+      value: https://grafana.prod.marketdata.com
+    - name: Alerts
+      value: https://alertmanager.prod.marketdata.com
+    - name: Support
+      value: ops@marketdata.com

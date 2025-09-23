@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: market-data-agent
+  labels:
+    app.kubernetes.io/name: market-data-agent
+    app.kubernetes.io/component: namespace
+    app.kubernetes.io/part-of: market-data-platform
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    kubernetes.io/description: "Market Data Agent production namespace"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: market-data-agent-quota
+  namespace: market-data-agent
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    persistentvolumeclaims: "10"
+    services: "20"
+    secrets: "30"
+    configmaps: "30"
+    pods: "20"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: market-data-agent-limits
+  namespace: market-data-agent
+spec:
+  limits:
+  - default:
+      cpu: "1"
+      memory: 2Gi
+    defaultRequest:
+      cpu: 200m
+      memory: 512Mi
+    type: Container
+  - max:
+      cpu: "4"
+      memory: 8Gi
+    min:
+      cpu: 100m
+      memory: 128Mi
+    type: Container

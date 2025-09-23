@@ -1,0 +1,157 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "market-data-agent.fullname" . }}-config
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "market-data-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: config
+data:
+  # Application configuration
+  APP_NAME: {{ .Values.config.app.name | quote }}
+  APP_VERSION: {{ .Values.config.app.version | quote }}
+  ENVIRONMENT: {{ .Values.config.app.environment | quote }}
+  DEBUG: {{ .Values.config.app.debug | quote }}
+
+  # Server configuration
+  HOST: {{ .Values.config.server.host | quote }}
+  PORT: {{ .Values.config.server.port | quote }}
+  WEBSOCKET_PORT: {{ .Values.config.server.websocket_port | quote }}
+  METRICS_PORT: {{ .Values.config.server.metrics_port | quote }}
+  WORKERS: {{ .Values.config.server.workers | quote }}
+
+  # Database configuration
+  DB_POOL_SIZE: {{ .Values.config.database.pool_size | quote }}
+  DB_MAX_OVERFLOW: {{ .Values.config.database.max_overflow | quote }}
+  DB_POOL_TIMEOUT: {{ .Values.config.database.pool_timeout | quote }}
+
+  # Cache configuration
+  CACHE_ENABLED: {{ .Values.config.cache.enabled | quote }}
+  CACHE_TTL: {{ .Values.config.cache.ttl | quote }}
+  CACHE_MAX_SIZE: {{ .Values.config.cache.max_size | quote }}
+
+  # Monitoring configuration
+  PROMETHEUS_ENABLED: {{ .Values.config.monitoring.prometheus.enabled | quote }}
+  PROMETHEUS_PORT: {{ .Values.config.monitoring.prometheus.port | quote }}
+  PROMETHEUS_PATH: {{ .Values.config.monitoring.prometheus.path | quote }}
+
+  # Logging configuration
+  LOG_LEVEL: {{ .Values.config.logging.level | quote }}
+  LOG_FORMAT: {{ .Values.config.logging.format | quote }}
+
+  # Health check configuration
+  HEALTH_CHECK_TIMEOUT: "5"
+  HEALTH_CHECK_INTERVAL: "30"
+
+  # Data sources configuration
+  DATA_SOURCES_ENABLED: "yfinance,alpha_vantage,iex_cloud,twelve_data,finnhub,polygon"
+
+  # Quality settings
+  QUALITY_THRESHOLD: "0.8"
+  QUALITY_WINDOW: "3600"
+
+  # Memory settings
+  MEMORY_CLEANUP_INTERVAL: "3600"
+  MEMORY_MAX_ENTITIES: "10000"
+
+  # Rate limiting
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_REQUESTS: "1000"
+  RATE_LIMIT_WINDOW: "60"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "market-data-agent.fullname" . }}-app-config
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "market-data-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app-config
+data:
+  production.yaml: |
+    # Market Data Agent Production Configuration
+    app:
+      name: {{ .Values.config.app.name }}
+      version: {{ .Values.config.app.version }}
+      environment: {{ .Values.config.app.environment }}
+      debug: {{ .Values.config.app.debug }}
+
+    server:
+      host: {{ .Values.config.server.host }}
+      port: {{ .Values.config.server.port }}
+      websocket_port: {{ .Values.config.server.websocket_port }}
+      metrics_port: {{ .Values.config.server.metrics_port }}
+      workers: {{ .Values.config.server.workers }}
+
+    database:
+      pool_size: {{ .Values.config.database.pool_size }}
+      max_overflow: {{ .Values.config.database.max_overflow }}
+      pool_timeout: {{ .Values.config.database.pool_timeout }}
+      echo: false
+      pool_pre_ping: true
+
+    cache:
+      enabled: {{ .Values.config.cache.enabled }}
+      ttl: {{ .Values.config.cache.ttl }}
+      max_size: {{ .Values.config.cache.max_size }}
+      compression: true
+
+    monitoring:
+      prometheus:
+        enabled: {{ .Values.config.monitoring.prometheus.enabled }}
+        port: {{ .Values.config.monitoring.prometheus.port }}
+        path: {{ .Values.config.monitoring.prometheus.path | quote }}
+      health_checks:
+        timeout: 5
+        interval: 30
+
+    logging:
+      level: {{ .Values.config.logging.level }}
+      format: {{ .Values.config.logging.format }}
+      file: "/app/logs/app.log"
+      rotation: "1 day"
+      retention: "30 days"
+
+    data_sources:
+      yfinance:
+        enabled: true
+        priority: 1
+        rate_limit: 120
+      alpha_vantage:
+        enabled: true
+        priority: 2
+        rate_limit: 500
+      iex_cloud:
+        enabled: true
+        priority: 3
+        rate_limit: 500000
+      twelve_data:
+        enabled: true
+        priority: 4
+        rate_limit: 800
+      finnhub:
+        enabled: true
+        priority: 5
+        rate_limit: 3600
+      polygon:
+        enabled: true
+        priority: 6
+        rate_limit: 5
+
+    quality:
+      threshold: 0.8
+      window: 3600
+      scoring:
+        weights:
+          completeness: 0.2
+          accuracy: 0.25
+          consistency: 0.2
+          timeliness: 0.15
+          validity: 0.1
+          uniqueness: 0.1
+
+    rate_limiting:
+      enabled: true
+      requests_per_minute: 1000
+      burst_size: 100
+      algorithm: "token_bucket"

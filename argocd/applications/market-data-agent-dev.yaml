@@ -1,0 +1,135 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: market-data-agent-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: market-data-agent
+    app.kubernetes.io/component: argocd-application
+    app.kubernetes.io/part-of: market-data-platform
+    environment: development
+  annotations:
+    argocd.argoproj.io/app-description: "Market Data Agent - Development Environment"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: market-data-alerts
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: market-data-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: market-data-platform
+
+  source:
+    repoURL: https://github.com/LukeLamb/market-data-agent.git
+    targetRevision: develop
+    path: helm/market-data-agent
+    helm:
+      valueFiles:
+        - values.yaml
+      parameters:
+        - name: config.app.environment
+          value: development
+        - name: replicaCount
+          value: "1"
+        - name: resources.requests.cpu
+          value: 100m
+        - name: resources.requests.memory
+          value: 256Mi
+        - name: resources.limits.cpu
+          value: 500m
+        - name: resources.limits.memory
+          value: 1Gi
+        - name: postgresql.enabled
+          value: "true"
+        - name: postgresql.auth.password
+          value: dev-password
+        - name: redis.enabled
+          value: "true"
+        - name: redis.auth.password
+          value: dev-password
+        - name: autoscaling.enabled
+          value: "false"
+        - name: ingress.enabled
+          value: "true"
+        - name: ingress.hosts[0].host
+          value: market-data-agent-dev.local
+      values: |
+        # Development specific overrides
+        config:
+          app:
+            debug: true
+          logging:
+            level: DEBUG
+          database:
+            pool_size: 5
+            max_overflow: 10
+          monitoring:
+            prometheus:
+              enabled: true
+
+        persistence:
+          enabled: false
+
+        postgresql:
+          primary:
+            persistence:
+              size: 10Gi
+            resources:
+              requests:
+                memory: 512Mi
+                cpu: 250m
+              limits:
+                memory: 1Gi
+                cpu: 500m
+
+        redis:
+          master:
+            persistence:
+              size: 2Gi
+            resources:
+              requests:
+                memory: 256Mi
+                cpu: 100m
+              limits:
+                memory: 512Mi
+                cpu: 200m
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: market-data-dev
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 10
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: ""
+      kind: Secret
+      name: sh.helm.release.v1.*
+      jsonPointers:
+        - /data
+
+  info:
+    - name: Environment
+      value: Development
+    - name: Repository
+      value: https://github.com/LukeLamb/market-data-agent
+    - name: Documentation
+      value: https://github.com/LukeLamb/market-data-agent/blob/main/docs/README.md

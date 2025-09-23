@@ -1,0 +1,126 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: market-data-platform
+  namespace: argocd
+  labels:
+    project: market-data-platform
+    component: argocd-project
+  annotations:
+    argocd.argoproj.io/project-description: "Market Data Platform project for managing all market data applications"
+spec:
+  description: "Market Data Platform - Enterprise market data processing and streaming"
+
+  # Source repositories
+  sourceRepos:
+    - 'https://github.com/LukeLamb/market-data-agent.git'
+    - 'https://charts.bitnami.com/bitnami'
+    - 'https://prometheus-community.github.io/helm-charts'
+    - 'https://grafana.github.io/helm-charts'
+
+  # Destination clusters and namespaces
+  destinations:
+    - namespace: 'market-data-*'
+      server: 'https://kubernetes.default.svc'
+    - namespace: 'monitoring'
+      server: 'https://kubernetes.default.svc'
+    - namespace: 'argocd'
+      server: 'https://kubernetes.default.svc'
+
+  # Cluster resource whitelist
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRole
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRoleBinding
+    - group: 'apiextensions.k8s.io'
+      kind: CustomResourceDefinition
+    - group: 'admissionregistration.k8s.io'
+      kind: MutatingWebhookConfiguration
+    - group: 'admissionregistration.k8s.io'
+      kind: ValidatingWebhookConfiguration
+
+  # Namespace resource whitelist
+  namespaceResourceWhitelist:
+    - group: ''
+      kind: '*'
+    - group: 'apps'
+      kind: '*'
+    - group: 'extensions'
+      kind: '*'
+    - group: 'networking.k8s.io'
+      kind: '*'
+    - group: 'policy'
+      kind: '*'
+    - group: 'autoscaling'
+      kind: '*'
+    - group: 'batch'
+      kind: '*'
+    - group: 'storage.k8s.io'
+      kind: '*'
+    - group: 'monitoring.coreos.com'
+      kind: '*'
+    - group: 'metrics.k8s.io'
+      kind: '*'
+
+  # RBAC roles for this project
+  roles:
+    - name: developer
+      description: "Developer access for market data applications"
+      policies:
+        - p, proj:market-data-platform:developer, applications, get, market-data-platform/*, allow
+        - p, proj:market-data-platform:developer, applications, sync, market-data-platform/*, allow
+        - p, proj:market-data-platform:developer, applications, action/*, market-data-platform/*, allow
+        - p, proj:market-data-platform:developer, repositories, get, *, allow
+        - p, proj:market-data-platform:developer, repositories, create, *, allow
+        - p, proj:market-data-platform:developer, repositories, update, *, allow
+      groups:
+        - market-data:developers
+
+    - name: operator
+      description: "Operator access for market data applications"
+      policies:
+        - p, proj:market-data-platform:operator, applications, *, market-data-platform/*, allow
+        - p, proj:market-data-platform:operator, repositories, *, *, allow
+        - p, proj:market-data-platform:operator, clusters, *, *, allow
+      groups:
+        - market-data:operators
+
+    - name: admin
+      description: "Admin access for market data platform"
+      policies:
+        - p, proj:market-data-platform:admin, *, *, *, allow
+      groups:
+        - market-data:admins
+
+  # Sync windows for automated deployments
+  syncWindows:
+    - kind: allow
+      schedule: '0 8-18 * * MON-FRI'
+      duration: 10h
+      applications:
+        - '*-dev'
+        - '*-staging'
+      timeZone: 'UTC'
+      manualSync: true
+
+    - kind: deny
+      schedule: '0 0-6 * * SAT,SUN'
+      duration: 6h
+      applications:
+        - '*-prod'
+      timeZone: 'UTC'
+      manualSync: false
+
+  # Signature keys for signed commits
+  signatureKeys: []
+
+  # Orphaned resources monitoring
+  orphanedResources:
+    warn: true
+    ignore:
+      - group: ''
+        kind: Secret
+        name: 'argocd-*'

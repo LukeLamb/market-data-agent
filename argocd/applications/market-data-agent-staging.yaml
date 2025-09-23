@@ -1,0 +1,147 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: market-data-agent-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: market-data-agent
+    app.kubernetes.io/component: argocd-application
+    app.kubernetes.io/part-of: market-data-platform
+    environment: staging
+  annotations:
+    argocd.argoproj.io/app-description: "Market Data Agent - Staging Environment"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: market-data-alerts
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: market-data-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: market-data-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: market-data-platform
+
+  source:
+    repoURL: https://github.com/LukeLamb/market-data-agent.git
+    targetRevision: main
+    path: helm/market-data-agent
+    helm:
+      valueFiles:
+        - values.yaml
+      parameters:
+        - name: config.app.environment
+          value: staging
+        - name: replicaCount
+          value: "2"
+        - name: resources.requests.cpu
+          value: 200m
+        - name: resources.requests.memory
+          value: 512Mi
+        - name: resources.limits.cpu
+          value: "1"
+        - name: resources.limits.memory
+          value: 2Gi
+        - name: postgresql.enabled
+          value: "true"
+        - name: redis.enabled
+          value: "true"
+        - name: autoscaling.enabled
+          value: "true"
+        - name: autoscaling.minReplicas
+          value: "2"
+        - name: autoscaling.maxReplicas
+          value: "5"
+        - name: ingress.enabled
+          value: "true"
+        - name: ingress.hosts[0].host
+          value: market-data-agent-staging.example.com
+      values: |
+        # Staging specific overrides
+        config:
+          app:
+            debug: false
+          logging:
+            level: INFO
+          database:
+            pool_size: 15
+            max_overflow: 25
+          monitoring:
+            prometheus:
+              enabled: true
+
+        persistence:
+          enabled: true
+          size: 20Gi
+
+        postgresql:
+          primary:
+            persistence:
+              size: 50Gi
+            resources:
+              requests:
+                memory: 1Gi
+                cpu: 500m
+              limits:
+                memory: 2Gi
+                cpu: "1"
+
+        redis:
+          master:
+            persistence:
+              size: 10Gi
+            resources:
+              requests:
+                memory: 512Mi
+                cpu: 250m
+              limits:
+                memory: 1Gi
+                cpu: 500m
+
+        metrics:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+
+        networkPolicy:
+          enabled: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: market-data-staging
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+  revisionHistoryLimit: 20
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: ""
+      kind: Secret
+      name: sh.helm.release.v1.*
+      jsonPointers:
+        - /data
+
+  info:
+    - name: Environment
+      value: Staging
+    - name: Repository
+      value: https://github.com/LukeLamb/market-data-agent
+    - name: Documentation
+      value: https://github.com/LukeLamb/market-data-agent/blob/main/docs/README.md
+    - name: Monitoring
+      value: https://grafana.staging.example.com

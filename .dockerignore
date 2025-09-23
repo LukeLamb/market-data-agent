@@ -1,0 +1,128 @@
+# Docker ignore file for Market Data Agent
+# Phase 4 Step 1: Container Orchestration & Deployment
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+README*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+.env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+.tmp
+
+# Development and testing
+tests/
+test_data/
+.env.local
+.env.development
+.env.test
+
+# Kubernetes manifests (handled separately)
+k8s/
+kubernetes/
+helm/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+Jenkinsfile
+
+# Docker
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+
+# Backup files
+*.bak
+*.backup
+
+# IDE specific
+.vscode/settings.json
+.idea/workspace.xml
+
+# Data files (should be mounted as volumes)
+data/
+*.csv
+*.json
+*.parquet
+
+# Configuration files (should be provided via ConfigMaps)
+config/*.yaml
+config/*.yml
+*.config
+
+# Memory files
+memory.json

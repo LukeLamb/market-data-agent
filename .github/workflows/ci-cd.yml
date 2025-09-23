@@ -1,0 +1,384 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Code Quality and Testing
+  test:
+    name: Test and Quality Checks
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_market_data
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio black flake8 mypy
+
+    - name: Code formatting check
+      run: black --check --diff .
+
+    - name: Lint with flake8
+      run: |
+        flake8 src/ tests/ --max-line-length=88 --extend-ignore=E203,W503
+
+    - name: Type checking with mypy
+      run: mypy src/ --ignore-missing-imports
+
+    - name: Run tests with coverage
+      env:
+        DATABASE_URL: postgresql://postgres:test@localhost:5432/test_market_data
+        REDIS_URL: redis://localhost:6379/0
+        ENVIRONMENT: test
+      run: |
+        pytest tests/ -v --cov=src --cov-report=xml --cov-report=html
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+    - name: Security scan with bandit
+      run: |
+        pip install bandit
+        bandit -r src/ -f json -o bandit-report.json || true
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          coverage.xml
+          htmlcov/
+          bandit-report.json
+
+  # Security Scanning
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run Snyk to check for vulnerabilities
+      uses: snyk/actions/python@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high
+
+  # Build and Push Docker Image
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: github.event_name != 'pull_request'
+
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix=sha-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          VCS_REF=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+          VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+
+    - name: Scan Docker image with Trivy
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        format: 'sarif'
+        output: 'trivy-image-results.sarif'
+
+    - name: Upload image scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-image-results.sarif'
+
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        format: spdx-json
+        output-file: sbom.spdx.json
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v3
+      with:
+        name: sbom
+        path: sbom.spdx.json
+
+  # Deploy to Development
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    environment: development
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_DEV }}
+
+    - name: Deploy with Helm
+      run: |
+        helm upgrade --install market-data-agent-dev ./helm/market-data-agent \
+          --namespace market-data-dev \
+          --create-namespace \
+          --set image.tag=${{ github.sha }} \
+          --set config.app.environment=development \
+          --set replicaCount=1 \
+          --set resources.requests.cpu=100m \
+          --set resources.requests.memory=256Mi \
+          --values helm/market-data-agent/values-dev.yaml \
+          --wait --timeout=10m
+
+    - name: Run smoke tests
+      run: |
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=market-data-agent -n market-data-dev --timeout=300s
+        kubectl get pods -n market-data-dev
+
+        # Health check
+        kubectl port-forward svc/market-data-agent-dev 8080:80 -n market-data-dev &
+        sleep 5
+        curl -f http://localhost:8080/health || exit 1
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+    - name: Deploy with Helm
+      run: |
+        helm upgrade --install market-data-agent-staging ./helm/market-data-agent \
+          --namespace market-data-staging \
+          --create-namespace \
+          --set image.tag=${{ github.sha }} \
+          --set config.app.environment=staging \
+          --set replicaCount=2 \
+          --values helm/market-data-agent/values-staging.yaml \
+          --wait --timeout=15m
+
+    - name: Run integration tests
+      run: |
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=market-data-agent -n market-data-staging --timeout=600s
+
+        # Run comprehensive tests
+        kubectl port-forward svc/market-data-agent-staging 8080:80 -n market-data-staging &
+        sleep 10
+
+        # Health checks
+        curl -f http://localhost:8080/health
+        curl -f http://localhost:8080/ready
+
+        # API tests
+        curl -f http://localhost:8080/api/v1/sources
+        curl -f http://localhost:8080/metrics
+
+  # Deploy to Production
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging]
+    if: github.event_name == 'release'
+    environment: production
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_PROD }}
+
+    - name: Blue-Green Deployment
+      run: |
+        # Deploy to green environment
+        helm upgrade --install market-data-agent-green ./helm/market-data-agent \
+          --namespace market-data-prod \
+          --create-namespace \
+          --set image.tag=${{ github.sha }} \
+          --set config.app.environment=production \
+          --set fullnameOverride=market-data-agent-green \
+          --values helm/market-data-agent/values-prod.yaml \
+          --wait --timeout=20m
+
+    - name: Production Health Check
+      run: |
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=market-data-agent-green -n market-data-prod --timeout=600s
+
+        # Comprehensive health checks
+        kubectl port-forward svc/market-data-agent-green 8080:80 -n market-data-prod &
+        sleep 15
+
+        # Health and readiness
+        curl -f http://localhost:8080/health
+        curl -f http://localhost:8080/ready
+        curl -f http://localhost:8080/startup
+
+        # API functionality
+        curl -f http://localhost:8080/api/v1/health
+        curl -f http://localhost:8080/api/v1/sources
+
+    - name: Switch Traffic (Blue-Green)
+      run: |
+        # Update service selector to point to green deployment
+        kubectl patch service market-data-agent -n market-data-prod -p '{"spec":{"selector":{"app.kubernetes.io/instance":"market-data-agent-green"}}}'
+
+        # Wait for traffic switch
+        sleep 30
+
+        # Verify production traffic
+        curl -f http://localhost:8080/health
+
+    - name: Cleanup Old Deployment
+      run: |
+        # Remove blue deployment after successful green deployment
+        helm uninstall market-data-agent-blue -n market-data-prod || true
+
+  # Notify on Success/Failure
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [deploy-dev, deploy-staging, deploy-prod]
+    if: always()
+
+    steps:
+    - name: Notify Slack on Success
+      if: success()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: "✅ Market Data Agent deployment successful"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Notify Slack on Failure
+      if: failure()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        text: "❌ Market Data Agent deployment failed"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

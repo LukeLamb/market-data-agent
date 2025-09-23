@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: market-data-agent-data
+  namespace: market-data-agent
+  labels:
+    app.kubernetes.io/name: market-data-agent
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: market-data-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: market-data-agent-logs
+  namespace: market-data-agent
+  labels:
+    app.kubernetes.io/name: market-data-agent
+    app.kubernetes.io/component: logs
+    app.kubernetes.io/part-of: market-data-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs
+  resources:
+    requests:
+      storage: 5Gi

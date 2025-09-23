@@ -1,0 +1,321 @@
+# Default values for market-data-agent
+# This is a YAML-formatted file.
+
+# Global configuration
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# Image configuration
+image:
+  registry: docker.io
+  repository: market-data-agent
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Deployment configuration
+replicaCount: 3
+
+# Update strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Service configuration
+service:
+  type: ClusterIP
+  ports:
+    http: 80
+    websocket: 8001
+    metrics: 8080
+  annotations: {}
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: market-data-agent.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: market-data-agent-tls
+  #    hosts:
+  #      - market-data-agent.local
+
+# Resource configuration
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 200m
+    memory: 512Mi
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Vertical Pod Autoscaler
+verticalPodAutoscaler:
+  enabled: false
+  updatePolicy:
+    updateMode: "Auto"
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Service account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod annotations and labels
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podLabels: {}
+
+# Node selection
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - market-data-agent
+          topologyKey: kubernetes.io/hostname
+
+# Probes configuration
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+  successThreshold: 1
+
+startupProbe:
+  httpGet:
+    path: /startup
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+  successThreshold: 1
+
+# Persistence
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  annotations: {}
+
+# Configuration
+config:
+  # Application settings
+  app:
+    name: market-data-agent
+    version: "1.0.0"
+    environment: production
+    debug: false
+
+  # Server settings
+  server:
+    host: "0.0.0.0"
+    port: 8000
+    websocket_port: 8001
+    metrics_port: 8080
+    workers: 4
+
+  # Database settings
+  database:
+    pool_size: 20
+    max_overflow: 30
+    pool_timeout: 30
+
+  # Cache settings
+  cache:
+    enabled: true
+    ttl: 300
+    max_size: 10000
+
+  # Monitoring
+  monitoring:
+    prometheus:
+      enabled: true
+      port: 8080
+      path: "/metrics"
+
+  # Logging
+  logging:
+    level: INFO
+    format: json
+
+# Secrets (will be overridden by external secret management)
+secrets:
+  database_url: "postgresql://user:password@localhost:5432/market_data"
+  redis_url: "redis://localhost:6379/0"
+  api_keys: "{}"
+  jwt_secret: "change-me-in-production"
+
+# External secrets (if using external secret management)
+externalSecrets:
+  enabled: false
+  secretStore:
+    type: vault
+    vault:
+      server: "https://vault.example.com"
+      path: "secret"
+      version: "v2"
+
+# Dependencies configuration
+
+# PostgreSQL (TimescaleDB)
+postgresql:
+  enabled: true
+  auth:
+    username: market_data
+    database: market_data
+    existingSecret: ""
+  primary:
+    persistence:
+      enabled: true
+      size: 100Gi
+      storageClass: ""
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: 1000m
+      limits:
+        memory: 4Gi
+        cpu: 2000m
+
+# Redis
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    existingSecret: ""
+  master:
+    persistence:
+      enabled: true
+      size: 20Gi
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+
+# Prometheus monitoring
+prometheus:
+  enabled: false
+  server:
+    persistentVolume:
+      enabled: true
+      size: 50Gi
+
+# Network policies
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
+
+# Pod security policy
+podSecurityPolicy:
+  enabled: false
+
+# RBAC
+rbac:
+  create: true
+
+# Metrics and monitoring
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+  prometheusRule:
+    enabled: false
+    namespace: ""
+
+# Extra environment variables
+extraEnvVars: []
+# - name: FOO
+#   value: bar
+
+extraEnvVarsCM: ""
+extraEnvVarsSecret: ""
+
+# Extra volumes and volume mounts
+extraVolumes: []
+extraVolumeMounts: []
+
+# Init containers
+initContainers: []
+
+# Sidecar containers
+sidecars: []
+
+# Lifecycle hooks
+lifecycle: {}
