@@ -1,0 +1,244 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limiting-basic
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  minute: 100
+  hour: 1000
+  day: 10000
+  policy: redis
+  redis_host: redis.market-data.svc.cluster.local
+  redis_port: 6379
+  redis_password: redis_password
+  redis_database: 1
+  hide_client_headers: false
+  fault_tolerant: true
+plugin: rate-limiting
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limiting-premium
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  minute: 1000
+  hour: 10000
+  day: 100000
+  policy: redis
+  redis_host: redis.market-data.svc.cluster.local
+  redis_port: 6379
+  redis_password: redis_password
+  redis_database: 1
+  hide_client_headers: false
+  fault_tolerant: true
+plugin: rate-limiting
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limiting-internal
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  minute: 10000
+  hour: 100000
+  day: 1000000
+  policy: redis
+  redis_host: redis.market-data.svc.cluster.local
+  redis_port: 6379
+  redis_password: redis_password
+  redis_database: 1
+  hide_client_headers: false
+  fault_tolerant: true
+plugin: rate-limiting
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: cors-policy
+  namespace: kong
+  labels:
+    global: "true"
+config:
+  origins:
+  - "https://market-data-ui.example.com"
+  - "https://admin.market-data.example.com"
+  - "http://localhost:3000"
+  methods:
+  - GET
+  - POST
+  - PUT
+  - DELETE
+  - PATCH
+  - OPTIONS
+  headers:
+  - Accept
+  - Accept-Version
+  - Content-Length
+  - Content-MD5
+  - Content-Type
+  - Date
+  - Authorization
+  - X-Auth-Token
+  - X-API-Key
+  exposed_headers:
+  - X-Auth-Token
+  - X-RateLimit-Limit
+  - X-RateLimit-Remaining
+  - X-RateLimit-Reset
+  credentials: true
+  max_age: 3600
+  preflight_continue: false
+plugin: cors
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: jwt-auth
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  uri_param_names:
+  - jwt
+  header_names:
+  - Authorization
+  claims_to_verify:
+  - exp
+  - iat
+  - nbf
+  key_claim_name: iss
+  secret_is_base64: false
+  anonymous: ""
+  run_on_preflight: true
+plugin: jwt
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: oauth2-auth
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  scopes:
+  - read
+  - write
+  - admin
+  - market-data:read
+  - market-data:write
+  - analytics:read
+  - analytics:write
+  mandatory_scope: true
+  provision_key: provision_key_secret
+  token_expiration: 3600
+  enable_authorization_code: true
+  enable_client_credentials: true
+  enable_implicit_grant: false
+  enable_password_grant: false
+  hide_credentials: true
+  accept_http_if_already_terminated: true
+  auth_header_name: authorization
+plugin: oauth2
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-transformer
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  add:
+    headers:
+    - "X-Request-ID:$(uuid)"
+    - "X-Forwarded-Time:$(current_time)"
+    - "X-Agent-Version:v1.0.0"
+  append:
+    headers:
+    - "X-Correlation-ID:$(uuid)"
+  remove:
+    headers:
+    - "X-Internal-Header"
+  replace:
+    headers:
+    - "User-Agent:Market-Data-Agent/1.0"
+plugin: request-transformer
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: response-transformer
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  add:
+    headers:
+    - "X-Response-Time:$(response_time)"
+    - "X-Kong-Proxy-Latency:$(kong_proxy_latency)"
+    - "X-Kong-Upstream-Latency:$(kong_upstream_latency)"
+    - "X-RateLimit-Limit:$(ratelimit_limit)"
+    - "X-RateLimit-Remaining:$(ratelimit_remaining)"
+    - "X-RateLimit-Reset:$(ratelimit_reset)"
+  remove:
+    headers:
+    - "X-Internal-Token"
+    - "X-Database-Connection"
+plugin: response-transformer
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: prometheus-metrics
+  namespace: kong
+  labels:
+    global: "true"
+config:
+  per_consumer: true
+  status_code_metrics: true
+  latency_metrics: true
+  bandwidth_metrics: true
+  upstream_health_metrics: true
+plugin: prometheus
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: ip-restriction
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  allow:
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
+  - "127.0.0.1"
+  deny: []
+plugin: ip-restriction
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: key-auth
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  key_names:
+  - "X-API-Key"
+  - "apikey"
+  key_in_body: false
+  key_in_header: true
+  key_in_query: true
+  hide_credentials: true
+  anonymous: ""
+  run_on_preflight: true
+plugin: key-auth

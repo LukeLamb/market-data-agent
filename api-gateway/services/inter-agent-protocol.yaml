@@ -1,0 +1,456 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inter-agent-protocol-config
+  namespace: kong
+  labels:
+    app: inter-agent-protocol
+    version: v1.0.0
+data:
+  protocol-spec.yaml: |
+    # Market Data Agent Inter-Agent Communication Protocol v1.0.0
+
+    apiVersion: "v1"
+    kind: "InterAgentProtocol"
+    metadata:
+      name: "market-data-inter-agent-protocol"
+      version: "1.0.0"
+      description: "Communication protocol for market data agent ecosystem"
+
+    spec:
+      # Base communication settings
+      communication:
+        protocol: "https"
+        port: 8443
+        timeout: 30s
+        retry_policy:
+          max_attempts: 3
+          backoff: "exponential"
+          base_delay: "1s"
+          max_delay: "10s"
+
+      # Message format specification
+      message_format:
+        content_type: "application/json"
+        encoding: "utf-8"
+        compression: "gzip"
+
+        # Standard message envelope
+        envelope:
+          schema_version: "1.0.0"
+          message_id: "string (uuid)"
+          correlation_id: "string (uuid)"
+          timestamp: "string (ISO 8601)"
+          source_agent_id: "string"
+          target_agent_id: "string"
+          message_type: "string"
+          priority: "number (1-10)"
+          ttl: "number (seconds)"
+
+        # Message types and their schemas
+        message_types:
+          - name: "market_data_request"
+            description: "Request for market data"
+            schema:
+              symbol: "string"
+              data_type: "enum[quote,trade,orderbook,historical]"
+              start_time: "string (ISO 8601, optional)"
+              end_time: "string (ISO 8601, optional)"
+              granularity: "string (optional)"
+              fields: "array[string] (optional)"
+
+          - name: "market_data_response"
+            description: "Market data response"
+            schema:
+              request_id: "string"
+              status: "enum[success,error,partial]"
+              data: "object"
+              error: "object (optional)"
+              metadata:
+                record_count: "number"
+                data_quality: "number (0-1)"
+                latency_ms: "number"
+
+          - name: "analytics_request"
+            description: "Request for analytics computation"
+            schema:
+              computation_type: "string"
+              parameters: "object"
+              data_sources: "array[string]"
+              output_format: "string"
+
+          - name: "analytics_response"
+            description: "Analytics computation result"
+            schema:
+              request_id: "string"
+              status: "enum[success,error,computing]"
+              result: "object"
+              computation_time_ms: "number"
+              error: "object (optional)"
+
+          - name: "health_check"
+            description: "Agent health status check"
+            schema:
+              agent_id: "string"
+              status: "enum[healthy,degraded,unhealthy]"
+              uptime: "number (seconds)"
+              version: "string"
+              capabilities: "array[string]"
+
+          - name: "health_response"
+            description: "Health check response"
+            schema:
+              status: "enum[healthy,degraded,unhealthy]"
+              timestamp: "string (ISO 8601)"
+              metrics:
+                cpu_usage: "number (0-1)"
+                memory_usage: "number (0-1)"
+                response_time_ms: "number"
+                error_rate: "number (0-1)"
+
+          - name: "agent_discovery"
+            description: "Agent discovery and registration"
+            schema:
+              action: "enum[register,deregister,update]"
+              agent_info:
+                agent_id: "string"
+                agent_type: "string"
+                version: "string"
+                endpoints: "array[object]"
+                capabilities: "array[string]"
+                metadata: "object"
+
+          - name: "configuration_update"
+            description: "Configuration update notification"
+            schema:
+              config_type: "string"
+              config_data: "object"
+              version: "string"
+              apply_immediately: "boolean"
+
+      # Authentication and authorization
+      security:
+        authentication:
+          type: "jwt"
+          header: "Authorization"
+          prefix: "Bearer "
+
+        authorization:
+          scope_based: true
+          required_scopes:
+            market_data_request: ["market-data:read"]
+            market_data_response: ["market-data:write"]
+            analytics_request: ["analytics:read"]
+            analytics_response: ["analytics:write"]
+            health_check: ["monitoring:read"]
+            health_response: ["monitoring:write"]
+            agent_discovery: ["admin"]
+            configuration_update: ["admin"]
+
+      # Service discovery integration
+      service_discovery:
+        provider: "consul"
+        registration:
+          service_name_format: "{agent_type}-{agent_id}"
+          health_check_interval: "30s"
+          health_check_endpoint: "/health"
+          tags:
+            - "market-data-agent"
+            - "inter-agent-protocol-v1"
+
+      # Load balancing and failover
+      load_balancing:
+        algorithm: "least_connections"
+        health_check:
+          enabled: true
+          interval: "30s"
+          timeout: "5s"
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+
+      # Circuit breaker configuration
+      circuit_breaker:
+        enabled: true
+        failure_threshold: 5
+        recovery_timeout: "30s"
+        success_threshold: 3
+
+      # Rate limiting
+      rate_limiting:
+        enabled: true
+        default_limits:
+          requests_per_minute: 1000
+          burst: 100
+        by_message_type:
+          market_data_request:
+            requests_per_minute: 5000
+            burst: 500
+          analytics_request:
+            requests_per_minute: 100
+            burst: 20
+          health_check:
+            requests_per_minute: 200
+            burst: 50
+
+      # Monitoring and observability
+      observability:
+        metrics:
+          enabled: true
+          endpoint: "/metrics"
+          format: "prometheus"
+
+        tracing:
+          enabled: true
+          sampler: "probabilistic"
+          sampling_rate: 0.1
+
+        logging:
+          level: "info"
+          format: "json"
+          include_request_body: false
+          include_response_body: false
+
+      # Error handling
+      error_handling:
+        retry_policy:
+          enabled: true
+          max_attempts: 3
+          backoff_strategy: "exponential"
+
+        timeout_policy:
+          connect_timeout: "5s"
+          request_timeout: "30s"
+          idle_timeout: "60s"
+
+        error_codes:
+          - code: "AGENT_UNAVAILABLE"
+            description: "Target agent is not available"
+            retry: true
+          - code: "AUTHENTICATION_FAILED"
+            description: "Authentication failed"
+            retry: false
+          - code: "AUTHORIZATION_FAILED"
+            description: "Insufficient permissions"
+            retry: false
+          - code: "RATE_LIMIT_EXCEEDED"
+            description: "Rate limit exceeded"
+            retry: true
+          - code: "TIMEOUT"
+            description: "Request timeout"
+            retry: true
+          - code: "INVALID_MESSAGE_FORMAT"
+            description: "Invalid message format"
+            retry: false
+
+  routing-rules.yaml: |
+    # Inter-Agent Routing Rules
+
+    routing_rules:
+      # Market data routing
+      - name: "market_data_requests"
+        pattern: "market_data_request"
+        targets:
+          - agent_type: "market-data-collector"
+            weight: 70
+            condition: "symbol matches '^(AAPL|GOOGL|MSFT).*'"
+          - agent_type: "market-data-aggregator"
+            weight: 30
+            condition: "default"
+        fallback:
+          agent_type: "market-data-cache"
+
+      # Analytics routing
+      - name: "analytics_requests"
+        pattern: "analytics_request"
+        targets:
+          - agent_type: "analytics-engine"
+            weight: 80
+            condition: "computation_type in ['trend_analysis', 'volatility']"
+          - agent_type: "ml-analytics-engine"
+            weight: 20
+            condition: "computation_type contains 'ml_'"
+        fallback:
+          agent_type: "basic-analytics"
+
+      # Health check routing
+      - name: "health_checks"
+        pattern: "health_check"
+        targets:
+          - agent_type: "monitoring-agent"
+            weight: 100
+            condition: "always"
+
+      # Configuration updates
+      - name: "config_updates"
+        pattern: "configuration_update"
+        targets:
+          - agent_type: "*"
+            weight: 100
+            condition: "always"
+            broadcast: true
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: inter-agent-auth
+  namespace: kong
+  labels:
+    app: inter-agent-protocol
+config:
+  uri_param_names:
+  - jwt
+  header_names:
+  - Authorization
+  - X-Agent-Token
+  claims_to_verify:
+  - exp
+  - iat
+  - nbf
+  - agent_id
+  - agent_type
+  key_claim_name: iss
+  secret_is_base64: false
+  anonymous: ""
+  run_on_preflight: true
+plugin: jwt
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: inter-agent-rate-limiting
+  namespace: kong
+  labels:
+    app: inter-agent-protocol
+config:
+  minute: 1000
+  hour: 10000
+  day: 100000
+  policy: redis
+  redis_host: redis.market-data.svc.cluster.local
+  redis_port: 6379
+  redis_password: redis_password
+  redis_database: 4
+  hide_client_headers: false
+  fault_tolerant: true
+  identifier: "consumer"
+plugin: rate-limiting
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: inter-agent-request-validator
+  namespace: kong
+  labels:
+    app: inter-agent-protocol
+config:
+  version: "draft-07"
+  verbose_response: true
+  body_schema: |
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "required": ["message_id", "correlation_id", "timestamp", "source_agent_id", "target_agent_id", "message_type"],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "correlation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_agent_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_agent_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message_type": {
+          "type": "string",
+          "enum": ["market_data_request", "market_data_response", "analytics_request", "analytics_response", "health_check", "health_response", "agent_discovery", "configuration_update"]
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "ttl": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    }
+plugin: request-validator
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: inter-agent-correlation-id
+  namespace: kong
+  labels:
+    app: inter-agent-protocol
+config:
+  header_name: "X-Correlation-ID"
+  generator: "uuid"
+  echo_downstream: true
+plugin: correlation-id
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inter-agent-router
+  namespace: kong
+  labels:
+    app: inter-agent-protocol
+    service: router
+  annotations:
+    konghq.com/plugins: inter-agent-auth,inter-agent-rate-limiting,inter-agent-request-validator,inter-agent-correlation-id,prometheus-metrics
+    consul.hashicorp.com/service-name: "inter-agent-router"
+    consul.hashicorp.com/service-port: "8080"
+    consul.hashicorp.com/service-tags: "inter-agent,router,v1"
+spec:
+  type: ExternalName
+  externalName: inter-agent-router.market-data.svc.cluster.local
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: inter-agent-ingress
+  namespace: kong
+  labels:
+    app: inter-agent-protocol
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: inter-agent-auth,inter-agent-rate-limiting,inter-agent-request-validator,inter-agent-correlation-id,prometheus-metrics
+    konghq.com/strip-path: "false"
+    konghq.com/preserve-host: "true"
+spec:
+  rules:
+  - host: inter-agent.market-data.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: inter-agent-router
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - inter-agent.market-data.local
+    secretName: inter-agent-tls

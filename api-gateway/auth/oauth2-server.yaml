@@ -1,0 +1,424 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: auth
+  labels:
+    name: auth
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oauth2-server
+  namespace: auth
+  labels:
+    app: oauth2-server
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oauth2-secrets
+  namespace: auth
+  labels:
+    app: oauth2-server
+type: Opaque
+data:
+  # JWT signing key (base64 encoded)
+  jwt-private-key: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBdkpxWnZNbHJmN3R0... # Truncated for security
+  jwt-public-key: LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FRUU... # Truncated for security
+  # OAuth2 client credentials
+  oauth2-client-id: bWFya2V0LWRhdGEtYWdlbnQ= # market-data-agent
+  oauth2-client-secret: c3VwZXJfc2VjcmV0X2tleV8yMDI0 # super_secret_key_2024
+  # Database credentials
+  db-username: b2F1dGgyX3VzZXI= # oauth2_user
+  db-password: b2F1dGgyX3Bhc3N3b3Jk # oauth2_password
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-config
+  namespace: auth
+  labels:
+    app: oauth2-server
+data:
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 8080
+      ssl:
+        enabled: true
+        cert_file: "/etc/ssl/certs/tls.crt"
+        key_file: "/etc/ssl/private/tls.key"
+
+    database:
+      type: "postgres"
+      host: "postgres.market-data.svc.cluster.local"
+      port: 5432
+      database: "oauth2"
+      username_file: "/etc/secrets/oauth2/db-username"
+      password_file: "/etc/secrets/oauth2/db-password"
+      ssl_mode: "require"
+      max_connections: 25
+      max_idle_connections: 5
+
+    jwt:
+      issuer: "https://auth.market-data.example.com"
+      audience: "market-data-agents"
+      expiration: 3600  # 1 hour
+      refresh_expiration: 604800  # 7 days
+      algorithm: "RS256"
+      private_key_file: "/etc/secrets/oauth2/jwt-private-key"
+      public_key_file: "/etc/secrets/oauth2/jwt-public-key"
+
+    oauth2:
+      authorize_code_expiration: 600  # 10 minutes
+      access_token_expiration: 3600   # 1 hour
+      refresh_token_expiration: 604800 # 7 days
+      implicit_grant_enabled: false
+      password_grant_enabled: false
+      client_credentials_enabled: true
+      authorization_code_enabled: true
+
+    scopes:
+      - name: "read"
+        description: "Read access to market data"
+      - name: "write"
+        description: "Write access to market data"
+      - name: "admin"
+        description: "Administrative access"
+      - name: "market-data:read"
+        description: "Read market data endpoints"
+      - name: "market-data:write"
+        description: "Write market data endpoints"
+      - name: "analytics:read"
+        description: "Read analytics endpoints"
+      - name: "analytics:write"
+        description: "Write analytics endpoints"
+      - name: "monitoring:read"
+        description: "Read monitoring data"
+
+    rate_limiting:
+      enabled: true
+      requests_per_minute: 60
+      requests_per_hour: 1000
+
+    logging:
+      level: "info"
+      format: "json"
+      access_log: true
+      audit_log: true
+
+    cors:
+      enabled: true
+      allowed_origins:
+        - "https://market-data-ui.example.com"
+        - "https://admin.market-data.example.com"
+        - "http://localhost:3000"
+      allowed_methods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      allowed_headers:
+        - "Authorization"
+        - "Content-Type"
+        - "X-Requested-With"
+      max_age: 3600
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-server
+  namespace: auth
+  labels:
+    app: oauth2-server
+    version: v1.0.0
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: oauth2-server
+  template:
+    metadata:
+      labels:
+        app: oauth2-server
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: oauth2-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+      initContainers:
+      - name: migrate-database
+        image: market-data/oauth2-server:1.0.0
+        command: ["/app/migrate"]
+        env:
+        - name: DB_HOST
+          value: "postgres.market-data.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "oauth2"
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: db-username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: db-password
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: oauth2-server
+        image: market-data/oauth2-server:1.0.0
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: CONFIG_FILE
+          value: "/etc/config/oauth2/config.yaml"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config/oauth2
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets/oauth2
+          readOnly: true
+        - name: tls
+          mountPath: /etc/ssl/certs
+          readOnly: true
+        - name: tls-private
+          mountPath: /etc/ssl/private
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: oauth2-config
+      - name: secrets
+        secret:
+          secretName: oauth2-secrets
+          defaultMode: 0400
+      - name: tls
+        secret:
+          secretName: oauth2-tls
+          items:
+          - key: tls.crt
+            path: tls.crt
+      - name: tls-private
+        secret:
+          secretName: oauth2-tls
+          items:
+          - key: tls.key
+            path: tls.key
+          defaultMode: 0400
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - oauth2-server
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-server
+  namespace: auth
+  labels:
+    app: oauth2-server
+spec:
+  type: ClusterIP
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8080
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  selector:
+    app: oauth2-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-server-headless
+  namespace: auth
+  labels:
+    app: oauth2-server
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: oauth2-server
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: oauth2-server-netpol
+  namespace: auth
+spec:
+  podSelector:
+    matchLabels:
+      app: oauth2-server
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kong
+    - namespaceSelector:
+        matchLabels:
+          name: market-data
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9090
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: market-data
+    ports:
+    - protocol: TCP
+      port: 5432  # PostgreSQL
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53   # DNS
+    - protocol: UDP
+      port: 53   # DNS
+    - protocol: TCP
+      port: 443  # HTTPS outbound
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: oauth2-server-pdb
+  namespace: auth
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: oauth2-server
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: oauth2-server-hpa
+  namespace: auth
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: oauth2-server
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max

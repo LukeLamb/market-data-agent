@@ -1,0 +1,320 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jwt-validator-config
+  namespace: auth
+  labels:
+    app: jwt-validator
+data:
+  config.json: |
+    {
+      "jwt": {
+        "issuer": "https://auth.market-data.example.com",
+        "audiences": [
+          "market-data-agents",
+          "market-data-api",
+          "analytics-api"
+        ],
+        "algorithms": ["RS256"],
+        "public_key_url": "https://auth.market-data.example.com/.well-known/jwks.json",
+        "cache_ttl": 300,
+        "clock_skew": 30
+      },
+      "validation": {
+        "require_exp": true,
+        "require_iat": true,
+        "require_nbf": true,
+        "require_sub": true,
+        "require_aud": true,
+        "require_iss": true,
+        "custom_claims": [
+          "scope",
+          "role",
+          "tenant_id"
+        ]
+      },
+      "scopes": {
+        "read": {
+          "description": "Read access to resources",
+          "paths": [
+            "/api/v1/market-data/*:GET",
+            "/api/v1/analytics/*:GET",
+            "/api/v1/health:GET"
+          ]
+        },
+        "write": {
+          "description": "Write access to resources",
+          "paths": [
+            "/api/v1/market-data/*:POST",
+            "/api/v1/market-data/*:PUT",
+            "/api/v1/market-data/*:PATCH"
+          ]
+        },
+        "admin": {
+          "description": "Administrative access",
+          "paths": [
+            "/api/v1/admin/*:*",
+            "/api/v1/users/*:*",
+            "/api/v1/config/*:*"
+          ]
+        },
+        "market-data:read": {
+          "description": "Read market data",
+          "paths": [
+            "/api/v1/market-data/quotes:GET",
+            "/api/v1/market-data/trades:GET",
+            "/api/v1/market-data/orderbook:GET",
+            "/api/v1/market-data/historical:GET"
+          ]
+        },
+        "market-data:write": {
+          "description": "Write market data",
+          "paths": [
+            "/api/v1/market-data/quotes:POST",
+            "/api/v1/market-data/trades:POST",
+            "/api/v1/market-data/orderbook:POST"
+          ]
+        },
+        "analytics:read": {
+          "description": "Read analytics data",
+          "paths": [
+            "/api/v1/analytics/reports:GET",
+            "/api/v1/analytics/metrics:GET",
+            "/api/v1/analytics/dashboards:GET"
+          ]
+        },
+        "analytics:write": {
+          "description": "Create analytics",
+          "paths": [
+            "/api/v1/analytics/reports:POST",
+            "/api/v1/analytics/dashboards:POST"
+          ]
+        },
+        "monitoring:read": {
+          "description": "Read monitoring data",
+          "paths": [
+            "/api/v1/monitoring/health:GET",
+            "/api/v1/monitoring/metrics:GET",
+            "/api/v1/monitoring/status:GET"
+          ]
+        }
+      },
+      "roles": {
+        "user": {
+          "scopes": ["read", "market-data:read"],
+          "description": "Standard user access"
+        },
+        "trader": {
+          "scopes": ["read", "write", "market-data:read", "market-data:write"],
+          "description": "Trading user access"
+        },
+        "analyst": {
+          "scopes": ["read", "analytics:read", "analytics:write", "market-data:read"],
+          "description": "Analytics user access"
+        },
+        "admin": {
+          "scopes": ["read", "write", "admin", "market-data:read", "market-data:write", "analytics:read", "analytics:write", "monitoring:read"],
+          "description": "Administrative access"
+        },
+        "service": {
+          "scopes": ["read", "write", "market-data:read", "market-data:write", "monitoring:read"],
+          "description": "Service-to-service access"
+        }
+      },
+      "rate_limiting": {
+        "enabled": true,
+        "default": {
+          "requests_per_minute": 60,
+          "burst": 10
+        },
+        "by_scope": {
+          "admin": {
+            "requests_per_minute": 1000,
+            "burst": 50
+          },
+          "service": {
+            "requests_per_minute": 10000,
+            "burst": 100
+          }
+        }
+      },
+      "logging": {
+        "level": "info",
+        "format": "json",
+        "include_claims": true,
+        "mask_sensitive": true
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jwt-validator
+  namespace: auth
+  labels:
+    app: jwt-validator
+    version: v1.0.0
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: jwt-validator
+  template:
+    metadata:
+      labels:
+        app: jwt-validator
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: oauth2-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+      - name: jwt-validator
+        image: market-data/jwt-validator:1.0.0
+        ports:
+        - name: http
+          containerPort: 8081
+          protocol: TCP
+        - name: metrics
+          containerPort: 9091
+          protocol: TCP
+        env:
+        - name: CONFIG_FILE
+          value: "/etc/config/jwt-validator/config.json"
+        - name: PUBLIC_KEY_FILE
+          value: "/etc/secrets/oauth2/jwt-public-key"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config/jwt-validator
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets/oauth2
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: jwt-validator-config
+      - name: secrets
+        secret:
+          secretName: oauth2-secrets
+          defaultMode: 0400
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - jwt-validator
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jwt-validator
+  namespace: auth
+  labels:
+    app: jwt-validator
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8081
+    protocol: TCP
+  - name: metrics
+    port: 9091
+    targetPort: 9091
+    protocol: TCP
+  selector:
+    app: jwt-validator
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: jwt-validator-hpa
+  namespace: auth
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: jwt-validator
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 3
+        periodSeconds: 60
+      selectPolicy: Max

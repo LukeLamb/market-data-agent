@@ -1,0 +1,604 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: consul
+  labels:
+    name: consul
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: consul
+  namespace: consul
+  labels:
+    app: consul
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: consul
+  labels:
+    app: consul
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: consul
+  labels:
+    app: consul
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: consul
+subjects:
+- kind: ServiceAccount
+  name: consul
+  namespace: consul
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: consul-secrets
+  namespace: consul
+  labels:
+    app: consul
+type: Opaque
+data:
+  # Consul gossip encryption key (base64 encoded)
+  gossip-key: WU16UnVIYVR2c1g4d3JnV0VzVGVrczRrNHFmVzlJM3g= # YmZrRuHaTvsX8wrgWEsTeks4k4qfW9I3x
+  # Bootstrap ACL token
+  bootstrap-token: YjA1YTFlNDgtMzE2NC00NzRlLWE4ZjgtOGE4ZjZjYTIzOGY2 # b05a1e48-3164-474e-a8f8-8a8f6ca238f6
+  # Agent token
+  agent-token: YzEyYjNkNDUtNzg5MC00NWE2LWI3YjAtZmFjZTEyMzQ1Njc4 # c12b3d45-7890-45a6-b7b0-face12345678
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: consul-config
+  namespace: consul
+  labels:
+    app: consul
+data:
+  consul.hcl: |
+    # Consul configuration for Kubernetes deployment
+
+    datacenter = "market-data-dc1"
+    data_dir = "/consul/data"
+    log_level = "INFO"
+    server = true
+
+    # Cluster settings
+    bootstrap_expect = 3
+    retry_join = [
+      "consul-server-0.consul-server.consul.svc.cluster.local",
+      "consul-server-1.consul-server.consul.svc.cluster.local",
+      "consul-server-2.consul-server.consul.svc.cluster.local"
+    ]
+
+    # Network settings
+    bind_addr = "0.0.0.0"
+    client_addr = "0.0.0.0"
+
+    # Gossip encryption
+    encrypt_verify_incoming = true
+    encrypt_verify_outgoing = true
+
+    # ACL settings
+    acl = {
+      enabled = true
+      default_policy = "deny"
+      enable_token_persistence = true
+      enable_token_replication = true
+    }
+
+    # Performance settings
+    performance = {
+      raft_multiplier = 1
+    }
+
+    # Connect (service mesh) settings
+    connect = {
+      enabled = true
+    }
+
+    # UI settings
+    ui_config = {
+      enabled = true
+    }
+
+    # Telemetry
+    telemetry = {
+      prometheus_retention_time = "30m"
+      disable_hostname = true
+    }
+
+    # Ports
+    ports = {
+      grpc = 8502
+      grpc_tls = 8503
+    }
+
+    # Kubernetes integration
+    enable_central_service_config = true
+
+    # Service registration
+    services = [
+      {
+        name = "consul"
+        tags = ["consul-server"]
+        port = 8300
+        check = {
+          tcp = "localhost:8300"
+          interval = "10s"
+        }
+      }
+    ]
+
+  consul-agent.hcl: |
+    # Consul agent configuration for service discovery
+
+    datacenter = "market-data-dc1"
+    data_dir = "/consul/data"
+    log_level = "INFO"
+    server = false
+
+    # Retry join servers
+    retry_join = [
+      "consul-server.consul.svc.cluster.local"
+    ]
+
+    # Network settings
+    bind_addr = "0.0.0.0"
+    client_addr = "0.0.0.0"
+
+    # ACL settings
+    acl = {
+      enabled = true
+      default_policy = "deny"
+      enable_token_persistence = true
+    }
+
+    # Connect settings
+    connect = {
+      enabled = true
+    }
+
+    # Telemetry
+    telemetry = {
+      prometheus_retention_time = "30m"
+      disable_hostname = true
+    }
+
+    # Ports
+    ports = {
+      grpc = 8502
+      grpc_tls = 8503
+    }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: consul-server
+  namespace: consul
+  labels:
+    app: consul
+    component: server
+spec:
+  serviceName: consul-server
+  replicas: 3
+  selector:
+    matchLabels:
+      app: consul
+      component: server
+  template:
+    metadata:
+      labels:
+        app: consul
+        component: server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8500"
+        prometheus.io/path: "/v1/agent/metrics"
+    spec:
+      serviceAccountName: consul
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - consul
+              - key: component
+                operator: In
+                values:
+                - server
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: consul
+        image: hashicorp/consul:1.17.0
+        args:
+        - "agent"
+        - "-config-file=/consul/config/consul.hcl"
+        - "-encrypt=$(GOSSIP_ENCRYPTION_KEY)"
+        - "-bootstrap-expect=3"
+        ports:
+        - name: http
+          containerPort: 8500
+        - name: rpc
+          containerPort: 8400
+        - name: serflan-tcp
+          containerPort: 8301
+          protocol: TCP
+        - name: serflan-udp
+          containerPort: 8301
+          protocol: UDP
+        - name: serfwan-tcp
+          containerPort: 8302
+          protocol: TCP
+        - name: serfwan-udp
+          containerPort: 8302
+          protocol: UDP
+        - name: server
+          containerPort: 8300
+        - name: consuldns
+          containerPort: 8600
+        - name: grpc
+          containerPort: 8502
+        - name: grpc-tls
+          containerPort: 8503
+        env:
+        - name: GOSSIP_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: consul-secrets
+              key: gossip-key
+        - name: CONSUL_LOCAL_CONFIG
+          value: |
+            {
+              "datacenter": "market-data-dc1",
+              "server": true,
+              "leave_on_terminate": true,
+              "skip_leave_on_interrupt": true,
+              "rejoin_after_leave": true,
+              "enable_script_checks": false
+            }
+        volumeMounts:
+        - name: consul-config
+          mountPath: /consul/config
+          readOnly: true
+        - name: consul-data
+          mountPath: /consul/data
+        livenessProbe:
+          httpGet:
+            path: /v1/status/leader
+            port: 8500
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /v1/status/peers
+            port: 8500
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: consul-config
+        configMap:
+          name: consul-config
+  volumeClaimTemplates:
+  - metadata:
+      name: consul-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: fast-ssd
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul-server
+  namespace: consul
+  labels:
+    app: consul
+    component: server
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8500
+    targetPort: 8500
+  - name: rpc
+    port: 8400
+    targetPort: 8400
+  - name: serflan-tcp
+    port: 8301
+    targetPort: 8301
+    protocol: TCP
+  - name: serflan-udp
+    port: 8301
+    targetPort: 8301
+    protocol: UDP
+  - name: serfwan-tcp
+    port: 8302
+    targetPort: 8302
+    protocol: TCP
+  - name: serfwan-udp
+    port: 8302
+    targetPort: 8302
+    protocol: UDP
+  - name: server
+    port: 8300
+    targetPort: 8300
+  - name: consuldns
+    port: 8600
+    targetPort: 8600
+  - name: grpc
+    port: 8502
+    targetPort: 8502
+  - name: grpc-tls
+    port: 8503
+    targetPort: 8503
+  selector:
+    app: consul
+    component: server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul-ui
+  namespace: consul
+  labels:
+    app: consul
+    component: ui
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8500
+  selector:
+    app: consul
+    component: server
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: consul-agent
+  namespace: consul
+  labels:
+    app: consul
+    component: agent
+spec:
+  selector:
+    matchLabels:
+      app: consul
+      component: agent
+  template:
+    metadata:
+      labels:
+        app: consul
+        component: agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8500"
+        prometheus.io/path: "/v1/agent/metrics"
+    spec:
+      serviceAccountName: consul
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: consul
+        image: hashicorp/consul:1.17.0
+        args:
+        - "agent"
+        - "-config-file=/consul/config/consul-agent.hcl"
+        - "-encrypt=$(GOSSIP_ENCRYPTION_KEY)"
+        - "-node=$(NODE_NAME)"
+        - "-bind=$(POD_IP)"
+        - "-client=0.0.0.0"
+        ports:
+        - name: http
+          containerPort: 8500
+          hostPort: 8500
+        - name: grpc
+          containerPort: 8502
+          hostPort: 8502
+        - name: serflan-tcp
+          containerPort: 8301
+          hostPort: 8301
+          protocol: TCP
+        - name: serflan-udp
+          containerPort: 8301
+          hostPort: 8301
+          protocol: UDP
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: GOSSIP_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: consul-secrets
+              key: gossip-key
+        - name: CONSUL_HTTP_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: consul-secrets
+              key: agent-token
+        volumeMounts:
+        - name: consul-config
+          mountPath: /consul/config
+          readOnly: true
+        - name: consul-data
+          mountPath: /consul/data
+        livenessProbe:
+          httpGet:
+            path: /v1/agent/self
+            port: 8500
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /v1/agent/self
+            port: 8500
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: consul-config
+        configMap:
+          name: consul-config
+      - name: consul-data
+        hostPath:
+          path: /opt/consul/data
+          type: DirectoryOrCreate
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: consul-server-pdb
+  namespace: consul
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: consul
+      component: server
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: consul-netpol
+  namespace: consul
+spec:
+  podSelector:
+    matchLabels:
+      app: consul
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: market-data
+    - namespaceSelector:
+        matchLabels:
+          name: kong
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - podSelector:
+        matchLabels:
+          app: consul
+    ports:
+    - protocol: TCP
+      port: 8500  # HTTP API
+    - protocol: TCP
+      port: 8300  # Server RPC
+    - protocol: TCP
+      port: 8301  # Serf LAN
+    - protocol: UDP
+      port: 8301  # Serf LAN
+    - protocol: TCP
+      port: 8302  # Serf WAN
+    - protocol: UDP
+      port: 8302  # Serf WAN
+    - protocol: TCP
+      port: 8502  # gRPC
+    - protocol: TCP
+      port: 8503  # gRPC TLS
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: consul
+    ports:
+    - protocol: TCP
+      port: 8300
+    - protocol: TCP
+      port: 8301
+    - protocol: UDP
+      port: 8301
+    - protocol: TCP
+      port: 8302
+    - protocol: UDP
+      port: 8302
+    - protocol: TCP
+      port: 8500
+    - protocol: TCP
+      port: 8502
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53   # DNS
+    - protocol: UDP
+      port: 53   # DNS
+    - protocol: TCP
+      port: 443  # HTTPS outbound

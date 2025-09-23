@@ -1,0 +1,429 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-security-policies
+  namespace: kong
+  labels:
+    app: api-gateway
+    component: security
+data:
+  security-policy.yaml: |
+    # API Gateway Security Policies Configuration
+
+    security_policies:
+      # Global security settings
+      global:
+        enforce_https: true
+        min_tls_version: "1.2"
+        allowed_ciphers:
+          - "ECDHE-RSA-AES256-GCM-SHA384"
+          - "ECDHE-RSA-AES128-GCM-SHA256"
+          - "ECDHE-RSA-AES256-SHA384"
+          - "ECDHE-RSA-AES128-SHA256"
+
+        # Security headers
+        security_headers:
+          strict_transport_security: "max-age=31536000; includeSubDomains"
+          x_frame_options: "DENY"
+          x_content_type_options: "nosniff"
+          x_xss_protection: "1; mode=block"
+          referrer_policy: "strict-origin-when-cross-origin"
+          content_security_policy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+
+        # Rate limiting defaults
+        default_rate_limits:
+          anonymous:
+            requests_per_minute: 10
+            requests_per_hour: 100
+            requests_per_day: 1000
+          authenticated:
+            requests_per_minute: 100
+            requests_per_hour: 1000
+            requests_per_day: 10000
+          premium:
+            requests_per_minute: 1000
+            requests_per_hour: 10000
+            requests_per_day: 100000
+
+      # Service-specific policies
+      services:
+        market_data:
+          authentication_required: true
+          authorization_scopes:
+            - "market-data:read"
+            - "market-data:write"
+          rate_limits:
+            tier_1:  # Basic users
+              requests_per_minute: 50
+              requests_per_hour: 500
+              burst: 10
+            tier_2:  # Premium users
+              requests_per_minute: 500
+              requests_per_hour: 5000
+              burst: 50
+            tier_3:  # Enterprise users
+              requests_per_minute: 5000
+              requests_per_hour: 50000
+              burst: 500
+
+          # Request validation
+          request_validation:
+            max_request_size: "8MB"
+            allowed_content_types:
+              - "application/json"
+              - "application/x-www-form-urlencoded"
+            required_headers:
+              - "Content-Type"
+              - "Authorization"
+
+          # IP restrictions
+          ip_restrictions:
+            whitelist_enabled: false
+            whitelist_ips: []
+            blacklist_enabled: true
+            blacklist_ips:
+              - "192.168.1.0/24"  # Example blocked range
+
+          # DDoS protection
+          ddos_protection:
+            enabled: true
+            threshold_rps: 1000
+            block_duration: 300  # 5 minutes
+            detection_window: 60  # 1 minute
+
+        analytics:
+          authentication_required: true
+          authorization_scopes:
+            - "analytics:read"
+            - "analytics:write"
+          rate_limits:
+            tier_1:
+              requests_per_minute: 20
+              requests_per_hour: 200
+              burst: 5
+            tier_2:
+              requests_per_minute: 100
+              requests_per_hour: 1000
+              burst: 20
+            tier_3:
+              requests_per_minute: 500
+              requests_per_hour: 5000
+              burst: 100
+
+          request_validation:
+            max_request_size: "16MB"
+            allowed_content_types:
+              - "application/json"
+            timeout: 120  # seconds
+
+        inter_agent:
+          authentication_required: true
+          authorization_scopes:
+            - "inter-agent"
+            - "service"
+          rate_limits:
+            default:
+              requests_per_minute: 10000
+              requests_per_hour: 100000
+              burst: 1000
+
+          # mTLS for service-to-service
+          mutual_tls:
+            enabled: true
+            verify_client: true
+            client_ca_file: "/etc/ssl/ca/client-ca.crt"
+
+      # Threat protection
+      threat_protection:
+        sql_injection:
+          enabled: true
+          detection_patterns:
+            - "(?i)(union|select|insert|delete|update|drop|create|alter)"
+            - "(?i)(script|javascript|vbscript)"
+            - "(?i)(exec|execute|sp_|xp_)"
+
+        xss_protection:
+          enabled: true
+          detection_patterns:
+            - "(?i)(<script|</script>|javascript:|vbscript:)"
+            - "(?i)(onload|onerror|onclick|onmouseover)"
+
+        path_traversal:
+          enabled: true
+          detection_patterns:
+            - "(\\.\\./|\\.\\.\\\\)"
+            - "(/etc/passwd|/etc/shadow)"
+
+        command_injection:
+          enabled: true
+          detection_patterns:
+            - "(\\||&&|;|`|\\$\\(|\\$\\{)"
+
+      # Audit and compliance
+      audit:
+        enabled: true
+        log_level: "info"
+        log_requests: true
+        log_responses: false  # Don't log response bodies for privacy
+        log_headers: true
+        mask_sensitive_headers:
+          - "Authorization"
+          - "X-API-Key"
+          - "Cookie"
+
+        # Compliance requirements
+        compliance:
+          gdpr:
+            enabled: true
+            data_retention_days: 90
+            anonymize_ip: true
+
+          pci_dss:
+            enabled: false  # Not handling payment data
+
+          sox:
+            enabled: true
+            audit_trail: true
+
+      # Incident response
+      incident_response:
+        auto_block:
+          enabled: true
+          triggers:
+            - high_error_rate: 50  # % error rate
+            - suspicious_patterns: 10  # requests per minute
+            - rate_limit_violations: 100  # violations per minute
+
+        alerting:
+          webhook_url: "https://alerts.market-data.example.com/webhook"
+          email_notifications:
+            - "security@market-data.example.com"
+
+        escalation:
+          level_1: "security_team"
+          level_2: "incident_commander"
+          level_3: "ciso"
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: global-security-headers
+  namespace: kong
+  labels:
+    global: "true"
+config:
+  add:
+    headers:
+    - "Strict-Transport-Security:max-age=31536000; includeSubDomains"
+    - "X-Frame-Options:DENY"
+    - "X-Content-Type-Options:nosniff"
+    - "X-XSS-Protection:1; mode=block"
+    - "Referrer-Policy:strict-origin-when-cross-origin"
+    - "Content-Security-Policy:default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    - "X-API-Gateway:Kong/Market-Data-Agent"
+  remove:
+    headers:
+    - "Server"
+    - "X-Powered-By"
+plugin: response-transformer
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-size-limiting-strict
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  allowed_payload_size: 1
+  size_unit: megabytes
+  require_content_length: true
+plugin: request-size-limiting
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: bot-detection
+  namespace: kong
+  labels:
+    global: "true"
+config:
+  allow:
+  - "Googlebot"
+  - "Bingbot"
+  - "market-data-agent"
+  deny:
+  - "BadBot"
+  - "Scrapy"
+  - "Python-urllib"
+  - "curl"
+  - "wget"
+plugin: bot-detection
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: ip-restriction-global
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  allow: []
+  deny:
+  - "10.0.0.0/8"     # Private networks (adjust as needed)
+  - "172.16.0.0/12"  # Private networks
+  - "192.168.0.0/16" # Private networks (example)
+  message: "Access denied from this IP address"
+plugin: ip-restriction
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: acl-market-data-users
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  allow:
+  - "market-data-users"
+  - "premium-users"
+  - "enterprise-users"
+  deny:
+  - "blocked-users"
+  hide_groups_header: true
+plugin: acl
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: acl-analytics-users
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  allow:
+  - "analytics-users"
+  - "premium-users"
+  - "enterprise-users"
+  deny:
+  - "blocked-users"
+  hide_groups_header: true
+plugin: acl
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: acl-inter-agent
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  allow:
+  - "internal-services"
+  - "verified-agents"
+  deny:
+  - "external-users"
+  - "blocked-services"
+  hide_groups_header: true
+plugin: acl
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-termination-maintenance
+  namespace: kong
+  labels:
+    global: "false"
+config:
+  status_code: 503
+  message: "Service temporarily unavailable for maintenance"
+  content_type: "application/json"
+  body: |
+    {
+      "error": "service_unavailable",
+      "message": "The API is currently undergoing maintenance. Please try again later.",
+      "retry_after": 3600,
+      "support_contact": "support@market-data.example.com"
+    }
+plugin: request-termination
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-security-netpol
+  namespace: kong
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kong
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from load balancer
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8443
+  # Allow traffic from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8100  # Status port
+  egress:
+  # Allow traffic to market-data services
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: market-data
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+  # Allow traffic to auth services
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: auth
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+  # Allow traffic to consul
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: consul
+    ports:
+    - protocol: TCP
+      port: 8500
+  # Allow traffic to Redis
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: market-data
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow DNS
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  # Allow HTTPS outbound
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443

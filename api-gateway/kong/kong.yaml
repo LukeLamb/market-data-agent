@@ -1,0 +1,463 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kong
+  labels:
+    name: kong
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kong-serviceaccount
+  namespace: kong
+  annotations:
+    meta.helm.sh/release-name: kong
+    meta.helm.sh/release-namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kong-ingress
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+rules:
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["list", "watch"]
+- apiGroups: [""]
+  resources: ["endpoints/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["extensions", "networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["extensions", "networking.k8s.io"]
+  resources: ["ingresses/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["tcpingresses/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["kongingresses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["kongplugins"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["konsumers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["kongcredentials"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kong-ingress
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kong-ingress
+subjects:
+- kind: ServiceAccount
+  name: kong-serviceaccount
+  namespace: kong
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kong-server-blocks
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+data:
+  servers.conf: |
+    # Kong configuration file for market data agent API gateway
+
+    # Database configuration
+    database = postgres
+    pg_host = postgres.market-data.svc.cluster.local
+    pg_port = 5432
+    pg_database = kong
+    pg_user = kong
+    pg_password_file = /etc/secrets/kong/postgres-password
+
+    # Performance tuning
+    worker_processes = auto
+    worker_connections = 1024
+
+    # Security settings
+    ssl_protocols = TLSv1.2 TLSv1.3
+    ssl_prefer_server_ciphers = on
+    ssl_session_cache = shared:SSL:10m
+    ssl_session_timeout = 10m
+
+    # Logging
+    log_level = info
+    access_log = logs/access.log
+    error_log = logs/error.log
+
+    # Admin API
+    admin_listen = 0.0.0.0:8001 ssl
+    admin_access_log = logs/admin_access.log
+    admin_error_log = logs/admin_error.log
+
+    # Proxy settings
+    proxy_listen = 0.0.0.0:8000 ssl
+    proxy_access_log = logs/proxy_access.log
+    proxy_error_log = logs/proxy_error.log
+
+    # Plugins
+    plugins = bundled,rate-limiting,jwt,oauth2,cors,request-transformer,response-transformer,prometheus
+
+    # Real IP settings
+    real_ip_header = X-Forwarded-For
+    real_ip_recursive = on
+    trusted_ips = 0.0.0.0/0,::/0
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kong-postgres-password
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+type: Opaque
+data:
+  postgres-password: a29uZ19wYXNzd29yZA== # kong_password base64 encoded
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kong-admin-password
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+type: Opaque
+data:
+  password: YWRtaW5fcGFzc3dvcmQ= # admin_password base64 encoded
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kong-controller
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: kong
+      app.kubernetes.io/name: kong
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: kong
+        app.kubernetes.io/name: kong
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: kong-serviceaccount
+      containers:
+      - name: controller
+        image: kong/kubernetes-ingress-controller:2.12
+        env:
+        - name: CONTROLLER_KONG_ADMIN_URL
+          value: "https://kong-admin.kong.svc.cluster.local:8444"
+        - name: CONTROLLER_PUBLISH_SERVICE
+          value: "kong/kong-proxy"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - name: crd-validation
+          containerPort: 8080
+        - name: health
+          containerPort: 10254
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 10254
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 10254
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kong-gateway
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: kong
+      app.kubernetes.io/name: kong
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: kong
+        app.kubernetes.io/name: kong
+        app.kubernetes.io/component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8100"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: kong-serviceaccount
+      initContainers:
+      - name: kong-migration
+        image: kong:3.4
+        command: ["kong", "migrations", "bootstrap"]
+        env:
+        - name: KONG_DATABASE
+          value: "postgres"
+        - name: KONG_PG_HOST
+          value: "postgres.market-data.svc.cluster.local"
+        - name: KONG_PG_PORT
+          value: "5432"
+        - name: KONG_PG_DATABASE
+          value: "kong"
+        - name: KONG_PG_USER
+          value: "kong"
+        - name: KONG_PG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: kong-postgres-password
+              key: postgres-password
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+      containers:
+      - name: kong
+        image: kong:3.4
+        env:
+        - name: KONG_DATABASE
+          value: "postgres"
+        - name: KONG_PG_HOST
+          value: "postgres.market-data.svc.cluster.local"
+        - name: KONG_PG_PORT
+          value: "5432"
+        - name: KONG_PG_DATABASE
+          value: "kong"
+        - name: KONG_PG_USER
+          value: "kong"
+        - name: KONG_PG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: kong-postgres-password
+              key: postgres-password
+        - name: KONG_ADMIN_LISTEN
+          value: "0.0.0.0:8001 ssl"
+        - name: KONG_PROXY_LISTEN
+          value: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+        - name: KONG_NGINX_WORKER_PROCESSES
+          value: "auto"
+        - name: KONG_PLUGINS
+          value: "bundled,rate-limiting,jwt,oauth2,cors,request-transformer,response-transformer,prometheus"
+        - name: KONG_LOG_LEVEL
+          value: "info"
+        - name: KONG_PROXY_ACCESS_LOG
+          value: "/tmp/access.log"
+        - name: KONG_ADMIN_ACCESS_LOG
+          value: "/tmp/admin_access.log"
+        - name: KONG_PROXY_ERROR_LOG
+          value: "/tmp/error.log"
+        - name: KONG_ADMIN_ERROR_LOG
+          value: "/tmp/admin_error.log"
+        - name: KONG_STATUS_LISTEN
+          value: "0.0.0.0:8100"
+        ports:
+        - name: proxy
+          containerPort: 8000
+        - name: proxy-ssl
+          containerPort: 8443
+        - name: admin
+          containerPort: 8001
+        - name: status
+          containerPort: 8100
+        livenessProbe:
+          httpGet:
+            path: /status
+            port: 8100
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /status
+            port: 8100
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: kong-server-blocks
+          mountPath: /kong/servers.conf
+          subPath: servers.conf
+          readOnly: true
+      volumes:
+      - name: kong-server-blocks
+        configMap:
+          name: kong-server-blocks
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-proxy
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+    app.kubernetes.io/component: gateway
+spec:
+  type: LoadBalancer
+  ports:
+  - name: proxy
+    port: 80
+    targetPort: 8000
+    protocol: TCP
+  - name: proxy-ssl
+    port: 443
+    targetPort: 8443
+    protocol: TCP
+  selector:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/component: gateway
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-admin
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+    app.kubernetes.io/component: gateway
+spec:
+  type: ClusterIP
+  ports:
+  - name: admin
+    port: 8001
+    targetPort: 8001
+    protocol: TCP
+  selector:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/component: gateway
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-controller
+  namespace: kong
+  labels:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/version: "3.4"
+    helm.sh/chart: kong-2.26.4
+    app.kubernetes.io/component: controller
+spec:
+  type: ClusterIP
+  ports:
+  - name: crd-validation
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app.kubernetes.io/instance: kong
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/component: controller
