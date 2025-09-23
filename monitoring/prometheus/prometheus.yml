@@ -1,0 +1,194 @@
+# Prometheus Configuration for Market Data Agent
+# Phase 4 Step 2: Enterprise Monitoring & Observability
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'market-data-prod'
+    replica: 'prometheus-1'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+      path_prefix: /alertmanager
+      scheme: http
+
+# Rules configuration
+rule_files:
+  - "rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Market Data Agent metrics
+  - job_name: 'market-data-agent'
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - market-data-agent
+            - market-data-dev
+            - market-data-staging
+            - market-data-prod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_service_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_service_name]
+        action: replace
+        target_label: kubernetes_name
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Node Exporter for system metrics
+  - job_name: 'node-exporter'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: keep
+        regex: node-exporter
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        action: replace
+        target_label: instance
+    scrape_interval: 30s
+
+  # Kubernetes API Server
+  - job_name: 'kubernetes-apiservers'
+    kubernetes_sd_configs:
+      - role: endpoints
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        action: keep
+        regex: default;kubernetes;https
+
+  # Kubernetes Nodes
+  - job_name: 'kubernetes-nodes'
+    kubernetes_sd_configs:
+      - role: node
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics
+
+  # Kubernetes Pods
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
+
+  # Redis metrics
+  - job_name: 'redis'
+    kubernetes_sd_configs:
+      - role: service
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        action: keep
+        regex: .*redis.*
+      - source_labels: [__meta_kubernetes_service_port_name]
+        action: keep
+        regex: metrics
+
+  # PostgreSQL/TimescaleDB metrics
+  - job_name: 'postgresql'
+    kubernetes_sd_configs:
+      - role: service
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        action: keep
+        regex: .*postgres.*|.*timescale.*
+      - source_labels: [__meta_kubernetes_service_port_name]
+        action: keep
+        regex: metrics
+
+  # Ingress Controller metrics
+  - job_name: 'ingress-nginx'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - ingress-nginx
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: keep
+        regex: ingress-nginx
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        action: keep
+        regex: "10254"
+
+# Remote write configuration (for long-term storage)
+remote_write:
+  - url: "http://thanos-receiver:19291/api/v1/receive"
+    queue_config:
+      capacity: 10000
+      max_shards: 1000
+      min_shards: 1
+      max_samples_per_send: 2000
+      batch_send_deadline: 5s
+    metadata_config:
+      send: true
+      send_interval: 30s
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: go_.*
+        action: drop
+      - source_labels: [__name__]
+        regex: prometheus_.*
+        action: drop

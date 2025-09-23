@@ -1,0 +1,202 @@
+# Jaeger Configuration for Market Data Agent
+# Phase 4 Step 2: Enterprise Monitoring & Observability
+
+# Service configuration
+service:
+  name: market-data-agent-jaeger
+  version: 1.0.0
+
+# Collector configuration
+collector:
+  # gRPC server configuration
+  grpc:
+    host-port: 0.0.0.0:14250
+    max-message-size: 4194304
+    max-connection-age: 60s
+    max-connection-age-grace: 5s
+
+  # HTTP server configuration
+  http:
+    host-port: 0.0.0.0:14268
+    cors:
+      allowed-origins: ["*"]
+      allowed-headers: ["Content-Type", "Accept", "Authorization"]
+
+  # Zipkin compatible endpoint
+  zipkin:
+    host-port: 0.0.0.0:9411
+
+  # Queue configuration
+  queue:
+    size: 10000
+    workers: 50
+
+  # Log level
+  log-level: info
+
+# Storage configuration
+storage:
+  type: elasticsearch
+  elasticsearch:
+    server-urls: http://elasticsearch:9200
+    index-prefix: jaeger
+    bulk:
+      actions: 1000
+      size: 5242880
+      flush-interval: 200ms
+      workers: 8
+    timeout: 15s
+    sniffer: false
+    create-index-templates: true
+    version: 7
+
+    # Index settings
+    index-settings:
+      number_of_shards: 1
+      number_of_replicas: 0
+      refresh_interval: 1s
+
+    # Rollover settings
+    use-aliases: true
+    max-doc-count: 10000000
+    max-span-age: 72h
+
+    # For production, consider using dedicated storage
+    # type: cassandra
+    # cassandra:
+    #   servers: ["cassandra:9042"]
+    #   keyspace: jaeger_v1_datacenter1
+    #   consistency: LOCAL_QUORUM
+
+# Agent configuration (for sidecar deployment)
+agent:
+  # Jaeger agent server
+  jaeger:
+    grpc:
+      host-port: 0.0.0.0:14250
+    thrift:
+      compact:
+        host-port: 0.0.0.0:6831
+      binary:
+        host-port: 0.0.0.0:6832
+      http:
+        host-port: 0.0.0.0:5778
+
+  # Zipkin compatible endpoint
+  zipkin:
+    thrift:
+      host-port: 0.0.0.0:5775
+
+  # Sampling configuration
+  sampling:
+    default_strategy:
+      type: probabilistic
+      param: 1.0  # 100% sampling for development, reduce for production
+
+    # Per-service sampling strategies
+    per_service_strategies:
+      - service: market-data-agent
+        type: probabilistic
+        param: 0.5  # 50% sampling
+
+      - service: market-data-api
+        type: ratelimiting
+        max_traces_per_second: 100
+
+      - service: data-source-yfinance
+        type: probabilistic
+        param: 0.1  # 10% sampling
+
+      - service: data-source-alpha-vantage
+        type: probabilistic
+        param: 0.1
+
+      - service: cache-service
+        type: probabilistic
+        param: 0.2  # 20% sampling
+
+      - service: database-service
+        type: probabilistic
+        param: 0.3  # 30% sampling
+
+# Query service configuration
+query:
+  # Base path for UI
+  base-path: /
+
+  # Log level
+  log-level: info
+
+  # Additional UI configuration
+  ui-config: |
+    {
+      "monitor": {
+        "menuEnabled": true
+      },
+      "dependencies": {
+        "menuEnabled": true
+      },
+      "archiveEnabled": true,
+      "tracking": {
+        "gaID": ""
+      }
+    }
+
+  # CORS configuration
+  query:
+    additional-headers:
+      - "Access-Control-Allow-Origin: *"
+      - "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS"
+      - "Access-Control-Allow-Headers: Content-Type, Authorization"
+
+# Span processor configuration
+processor:
+  jaeger:
+    workers: 50
+    queue-size: 2000
+
+  # Batch span processor for better performance
+  batch:
+    timeout: 1s
+    send-batch-size: 1024
+    send-batch-max-size: 2048
+
+# Resource configuration for Kubernetes deployment
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Environment-specific configurations
+environments:
+  development:
+    sampling:
+      default_strategy:
+        type: probabilistic
+        param: 1.0  # 100% sampling
+    log-level: debug
+
+  staging:
+    sampling:
+      default_strategy:
+        type: probabilistic
+        param: 0.5  # 50% sampling
+    log-level: info
+
+  production:
+    sampling:
+      default_strategy:
+        type: probabilistic
+        param: 0.1  # 10% sampling
+    log-level: warn
+
+    # Production-specific storage settings
+    storage:
+      elasticsearch:
+        bulk:
+          workers: 16
+          actions: 5000
+        timeout: 30s

@@ -1,0 +1,260 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Market Data Agent - Infrastructure",
+    "tags": ["market-data", "infrastructure", "performance"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "CPU Usage",
+        "type": "graph",
+        "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "rate(container_cpu_usage_seconds_total{pod=~\"market-data-agent.*\"}[5m]) * 100",
+            "legendFormat": "{{pod}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "CPU %", "min": 0, "max": 100 }
+        ],
+        "thresholds": [
+          { "value": 80, "colorMode": "critical", "op": "gt" }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Memory Usage",
+        "type": "graph",
+        "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+        "targets": [
+          {
+            "expr": "container_memory_usage_bytes{pod=~\"market-data-agent.*\"} / container_spec_memory_limit_bytes * 100",
+            "legendFormat": "{{pod}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Memory %", "min": 0, "max": 100 }
+        ],
+        "thresholds": [
+          { "value": 90, "colorMode": "critical", "op": "gt" }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Pod Restarts",
+        "type": "graph",
+        "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+        "targets": [
+          {
+            "expr": "increase(kube_pod_container_status_restarts_total{pod=~\"market-data-agent.*\"}[1h])",
+            "legendFormat": "{{pod}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Restarts", "min": 0 }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Cache Performance",
+        "type": "graph",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "rate(market_data_cache_hits_total[5m])",
+            "legendFormat": "Cache Hits - {{cache_type}}"
+          },
+          {
+            "expr": "rate(market_data_cache_misses_total[5m])",
+            "legendFormat": "Cache Misses - {{cache_type}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Operations/sec", "min": 0 }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Cache Hit Rate",
+        "type": "stat",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 8 },
+        "targets": [
+          {
+            "expr": "rate(market_data_cache_hits_total[5m]) / (rate(market_data_cache_hits_total[5m]) + rate(market_data_cache_misses_total[5m])) * 100",
+            "legendFormat": "{{cache_type}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                { "color": "red", "value": 0 },
+                { "color": "yellow", "value": 70 },
+                { "color": "green", "value": 85 }
+              ]
+            },
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Database Connections",
+        "type": "graph",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 18 },
+        "targets": [
+          {
+            "expr": "market_data_db_connections_active",
+            "legendFormat": "Active - {{database}}"
+          },
+          {
+            "expr": "market_data_db_connections_max",
+            "legendFormat": "Max - {{database}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Connections", "min": 0 }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Database Query Performance",
+        "type": "graph",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 18 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(market_data_db_query_duration_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(market_data_db_query_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(market_data_db_query_duration_seconds_bucket[5m]))",
+            "legendFormat": "99th percentile"
+          }
+        ],
+        "yAxes": [
+          { "label": "Query Time (s)", "min": 0 }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "API Request Rate",
+        "type": "graph",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 28 },
+        "targets": [
+          {
+            "expr": "rate(market_data_api_requests_total[5m])",
+            "legendFormat": "{{method}} {{endpoint}} ({{status_code}})"
+          }
+        ],
+        "yAxes": [
+          { "label": "Requests/sec", "min": 0 }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "WebSocket Connections",
+        "type": "graph",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 28 },
+        "targets": [
+          {
+            "expr": "market_data_websocket_connections_total",
+            "legendFormat": "{{endpoint}} - {{status}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Connections", "min": 0 }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Disk Usage",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 8, "x": 0, "y": 38 },
+        "targets": [
+          {
+            "expr": "kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes * 100",
+            "legendFormat": "{{persistentvolumeclaim}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": 0 },
+                { "color": "yellow", "value": 70 },
+                { "color": "red", "value": 90 }
+              ]
+            },
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "Network I/O",
+        "type": "graph",
+        "gridPos": { "h": 8, "w": 8, "x": 8, "y": 38 },
+        "targets": [
+          {
+            "expr": "rate(container_network_receive_bytes_total{pod=~\"market-data-agent.*\"}[5m])",
+            "legendFormat": "RX - {{pod}}"
+          },
+          {
+            "expr": "rate(container_network_transmit_bytes_total{pod=~\"market-data-agent.*\"}[5m])",
+            "legendFormat": "TX - {{pod}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Bytes/sec", "min": 0 }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Rate Limit Status",
+        "type": "gauge",
+        "gridPos": { "h": 8, "w": 8, "x": 16, "y": 38 },
+        "targets": [
+          {
+            "expr": "market_data_rate_limit_usage_ratio * 100",
+            "legendFormat": "{{source}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": 0 },
+                { "color": "yellow", "value": 70 },
+                { "color": "red", "value": 90 }
+              ]
+            },
+            "unit": "percent",
+            "min": 0,
+            "max": 100
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,344 @@
+# AlertManager Configuration for Market Data Agent
+# Phase 4 Step 2: Enterprise Monitoring & Observability
+
+global:
+  # Global SMTP configuration
+  smtp_smarthost: 'smtp.company.com:587'
+  smtp_from: 'alerts@marketdata.com'
+  smtp_auth_username: 'alerts@marketdata.com'
+  smtp_auth_password: 'smtp-password'
+  smtp_require_tls: true
+
+  # Global Slack configuration
+  slack_api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+
+  # Global PagerDuty configuration
+  pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+
+  # HTTP configuration
+  http_config:
+    tls_config:
+      insecure_skip_verify: false
+
+# Define templates for notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Routing configuration
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: 'default'
+
+  # Define routing tree
+  routes:
+    # Critical alerts - immediate escalation
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 5m
+      routes:
+        # Market data agent down - highest priority
+        - match:
+            alertname: MarketDataAgentDown
+          receiver: 'agent-down-escalation'
+          group_wait: 0s
+          repeat_interval: 1m
+
+        # High memory usage - infrastructure team
+        - match:
+            alertname: HighMemoryUsage
+          receiver: 'infrastructure-critical'
+
+        # Node not ready - infrastructure team
+        - match:
+            alertname: KubernetesNodeNotReady
+          receiver: 'infrastructure-critical'
+
+    # Warning alerts - standard notification
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      routes:
+        # Data source issues - data team
+        - match_re:
+            alertname: 'DataSource.*|DataQuality.*|DataFreshness.*'
+          receiver: 'data-team-warnings'
+
+        # Cache performance - performance team
+        - match_re:
+            alertname: 'Cache.*'
+          receiver: 'performance-team'
+
+        # Database issues - database team
+        - match_re:
+            alertname: 'Database.*'
+          receiver: 'database-team'
+
+        # Rate limiting - api team
+        - match:
+            alertname: RateLimitApproaching
+          receiver: 'api-team'
+
+    # Informational alerts - business team
+    - match:
+        severity: info
+      receiver: 'business-alerts'
+      routes:
+        # Price anomalies - trading team
+        - match:
+            alertname: PriceAnomalyDetected
+          receiver: 'trading-team'
+
+    # Maintenance window - silence all
+    - match:
+        alertname: MaintenanceMode
+      receiver: 'null'
+
+# Define receivers
+receivers:
+  # Default receiver
+  - name: 'default'
+    slack_configs:
+      - channel: '#market-data-alerts'
+        title: 'Market Data Alert'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          *Service:* {{ .Labels.service }}
+          {{ end }}
+        actions:
+          - type: button
+            text: 'Runbook :books:'
+            url: '{{ (index .Alerts 0).Annotations.runbook_url }}'
+          - type: button
+            text: 'Silence :mute:'
+            url: '{{ template "__alert_silence_link" . }}'
+
+  # Critical alerts with escalation
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'oncall@marketdata.com'
+        subject: '[CRITICAL] Market Data Alert'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Service: {{ .Labels.service }}
+
+          {{ if .Annotations.runbook_url }}
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}
+          {{ end }}
+    slack_configs:
+      - channel: '#critical-alerts'
+        title: ':rotating_light: CRITICAL Alert'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          *Service:* {{ .Labels.service }}
+          {{ end }}
+        color: 'danger'
+
+  # Agent down - highest escalation
+  - name: 'agent-down-escalation'
+    pagerduty_configs:
+      - service_key: 'market-data-agent-service-key'
+        description: 'Market Data Agent is DOWN'
+        details:
+          firing: '{{ template "__text_alert_list" . }}'
+        client: 'AlertManager'
+        client_url: '{{ template "__alertmanager_external_url" . }}'
+    email_configs:
+      - to: 'director@marketdata.com,manager@marketdata.com,oncall@marketdata.com'
+        subject: '[URGENT] Market Data Agent DOWN'
+        body: |
+          The Market Data Agent is currently DOWN.
+
+          This is a critical service failure requiring immediate attention.
+
+          {{ range .Alerts }}
+          Instance: {{ .Labels.instance }}
+          Duration: {{ .StartsAt }}
+          {{ end }}
+    slack_configs:
+      - channel: '#urgent-alerts'
+        username: 'AlertManager'
+        title: ':fire: URGENT: Market Data Agent DOWN'
+        text: 'Market Data Agent service is completely down. Immediate action required!'
+        color: 'danger'
+
+  # Infrastructure critical alerts
+  - name: 'infrastructure-critical'
+    email_configs:
+      - to: 'infrastructure-team@marketdata.com'
+        subject: '[CRITICAL] Infrastructure Alert'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Component: {{ .Labels.component }}
+          {{ end }}
+    slack_configs:
+      - channel: '#infrastructure-alerts'
+        title: ':warning: Infrastructure Critical Alert'
+        color: 'danger'
+
+  # Warning alerts
+  - name: 'warning-alerts'
+    slack_configs:
+      - channel: '#market-data-alerts'
+        title: ':warning: Warning Alert'
+        color: 'warning'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Component:* {{ .Labels.component }}
+          {{ end }}
+
+  # Data team warnings
+  - name: 'data-team-warnings'
+    email_configs:
+      - to: 'data-team@marketdata.com'
+        subject: '[WARNING] Data Quality/Source Alert'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Source: {{ .Labels.source }}
+          Symbol: {{ .Labels.symbol }}
+          {{ end }}
+    slack_configs:
+      - channel: '#data-quality-alerts'
+        title: ':chart_with_downwards_trend: Data Alert'
+        color: 'warning'
+
+  # Performance team alerts
+  - name: 'performance-team'
+    email_configs:
+      - to: 'performance-team@marketdata.com'
+        subject: '[WARNING] Performance Alert'
+    slack_configs:
+      - channel: '#performance-alerts'
+        title: ':rocket: Performance Alert'
+        color: 'warning'
+
+  # Database team alerts
+  - name: 'database-team'
+    email_configs:
+      - to: 'database-team@marketdata.com'
+        subject: '[WARNING] Database Alert'
+    slack_configs:
+      - channel: '#database-alerts'
+        title: ':floppy_disk: Database Alert'
+        color: 'warning'
+
+  # API team alerts
+  - name: 'api-team'
+    email_configs:
+      - to: 'api-team@marketdata.com'
+        subject: '[WARNING] API Alert'
+    slack_configs:
+      - channel: '#api-alerts'
+        title: ':electric_plug: API Alert'
+        color: 'warning'
+
+  # Business/trading team alerts
+  - name: 'business-alerts'
+    slack_configs:
+      - channel: '#business-alerts'
+        title: ':chart: Business Alert'
+        color: 'good'
+
+  # Trading team alerts
+  - name: 'trading-team'
+    email_configs:
+      - to: 'trading-team@marketdata.com'
+        subject: '[INFO] Price Anomaly Detected'
+        body: |
+          {{ range .Alerts }}
+          Symbol: {{ .Labels.symbol }}
+          Anomaly Type: {{ .Labels.anomaly_type }}
+          Score: {{ .Annotations.description }}
+          {{ end }}
+    slack_configs:
+      - channel: '#trading-alerts'
+        title: ':warning: Price Anomaly Detected'
+        color: 'warning'
+        text: |
+          {{ range .Alerts }}
+          *Symbol:* {{ .Labels.symbol }}
+          *Anomaly Type:* {{ .Labels.anomaly_type }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+
+  # Null receiver for silencing alerts
+  - name: 'null'
+
+# Inhibition rules - suppress certain alerts when others are firing
+inhibit_rules:
+  # Suppress warning alerts when critical alerts for the same service are firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service', 'instance']
+
+  # Suppress individual component alerts when the main service is down
+  - source_match:
+      alertname: 'MarketDataAgentDown'
+    target_match_re:
+      alertname: '.*'
+    equal: ['instance']
+
+  # Suppress cache alerts when database is down
+  - source_match_re:
+      alertname: 'Database.*'
+    target_match_re:
+      alertname: 'Cache.*'
+    equal: ['instance']
+
+  # Suppress rate limit alerts when data source is down
+  - source_match:
+      alertname: 'DataSourceDown'
+    target_match:
+      alertname: 'RateLimitApproaching'
+    equal: ['source']
+
+# Notification templates
+templates:
+  - '/etc/alertmanager/templates/email.tmpl'
+  - '/etc/alertmanager/templates/slack.tmpl'
+
+# Time intervals for different alert types
+time_intervals:
+  - name: 'business-hours'
+    time_intervals:
+      - times:
+          - start_time: '09:00'
+            end_time: '17:00'
+        weekdays: ['monday:friday']
+
+  - name: 'trading-hours'
+    time_intervals:
+      - times:
+          - start_time: '06:30'
+            end_time: '16:00'
+        weekdays: ['monday:friday']
+
+  - name: 'maintenance-window'
+    time_intervals:
+      - times:
+          - start_time: '02:00'
+            end_time: '04:00'
+        weekdays: ['sunday']

@@ -1,0 +1,172 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Market Data Agent - Overview",
+    "tags": ["market-data", "overview", "business"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Service Health Overview",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "up{job=\"market-data-agent\"}",
+            "legendFormat": "Agent Status"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "steps": [
+                { "color": "red", "value": 0 },
+                { "color": "green", "value": 1 }
+              ]
+            },
+            "mappings": [
+              { "options": { "0": { "text": "DOWN" } } },
+              { "options": { "1": { "text": "UP" } } }
+            ]
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Active Data Sources",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+        "targets": [
+          {
+            "expr": "count(market_data_source_health{status=\"healthy\"})",
+            "legendFormat": "Healthy Sources"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Symbols Monitored",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(market_data_symbols_processed_total)",
+            "legendFormat": "Total Symbols"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Request Rate",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+        "targets": [
+          {
+            "expr": "rate(market_data_source_requests_total[5m])",
+            "legendFormat": "Requests/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "unit": "reqps"
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Data Source Request Rate",
+        "type": "graph",
+        "gridPos": { "h": 9, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "rate(market_data_source_requests_total[5m])",
+            "legendFormat": "{{source}} - {{endpoint}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Requests/sec", "min": 0 }
+        ],
+        "legend": { "show": true, "values": true, "current": true }
+      },
+      {
+        "id": 6,
+        "title": "Response Time Distribution",
+        "type": "graph",
+        "gridPos": { "h": 9, "w": 12, "x": 12, "y": 8 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(market_data_source_response_time_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(market_data_source_response_time_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(market_data_source_response_time_seconds_bucket[5m]))",
+            "legendFormat": "99th percentile"
+          }
+        ],
+        "yAxes": [
+          { "label": "Response Time (s)", "min": 0 }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Error Rate by Source",
+        "type": "graph",
+        "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
+        "targets": [
+          {
+            "expr": "rate(market_data_source_requests_failed_total[5m]) / rate(market_data_source_requests_total[5m])",
+            "legendFormat": "{{source}} error rate"
+          }
+        ],
+        "yAxes": [
+          { "label": "Error Rate", "min": 0, "max": 1 }
+        ],
+        "thresholds": [
+          { "value": 0.1, "colorMode": "critical", "op": "gt" }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Data Quality Scores",
+        "type": "graph",
+        "gridPos": { "h": 9, "w": 12, "x": 12, "y": 17 },
+        "targets": [
+          {
+            "expr": "market_data_quality_score",
+            "legendFormat": "{{source}} - {{symbol}} ({{dimension}})"
+          }
+        ],
+        "yAxes": [
+          { "label": "Quality Score", "min": 0, "max": 1 }
+        ],
+        "thresholds": [
+          { "value": 0.7, "colorMode": "critical", "op": "lt" }
+        ]
+      }
+    ]
+  }
+}

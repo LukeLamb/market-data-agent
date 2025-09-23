@@ -1,0 +1,69 @@
+# Elasticsearch Configuration for Market Data Agent
+# Phase 4 Step 2: Enterprise Monitoring & Observability
+
+cluster.name: market-data-logs
+node.name: ${HOSTNAME}
+node.roles: [ master, data, ingest ]
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# Discovery settings for cluster
+discovery.type: single-node
+discovery.seed_hosts: []
+cluster.initial_master_nodes: []
+
+# For production cluster setup:
+# discovery.type: zen
+# discovery.seed_hosts: ["elasticsearch-1", "elasticsearch-2", "elasticsearch-3"]
+# cluster.initial_master_nodes: ["elasticsearch-1", "elasticsearch-2", "elasticsearch-3"]
+
+# Memory settings
+bootstrap.memory_lock: true
+
+# Index settings
+action.auto_create_index: true
+action.destructive_requires_name: true
+
+# Index templates for market data logs
+index.number_of_shards: 1
+index.number_of_replicas: 0
+index.refresh_interval: 5s
+
+# Security settings (for production)
+xpack.security.enabled: false
+# xpack.security.http.ssl.enabled: true
+# xpack.security.transport.ssl.enabled: true
+
+# Monitoring
+xpack.monitoring.enabled: true
+xpack.monitoring.collection.enabled: true
+
+# Machine learning
+xpack.ml.enabled: true
+
+# Logging
+logger.level: INFO
+logger.org.elasticsearch.discovery: WARN
+
+# Index lifecycle management
+xpack.ilm.enabled: true
+
+# Snapshot repository settings
+path.repo: ["/usr/share/elasticsearch/backups"]
+
+# Custom settings for market data
+indices.memory.index_buffer_size: 256mb
+indices.queries.cache.size: 256mb
+indices.fielddata.cache.size: 128mb
+
+# Thread pool settings
+thread_pool.write.queue_size: 1000
+thread_pool.search.queue_size: 1000
+
+# Circuit breaker settings
+indices.breaker.total.limit: 70%
+indices.breaker.request.limit: 40%
+indices.breaker.fielddata.limit: 40%

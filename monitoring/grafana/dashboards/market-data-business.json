@@ -1,0 +1,211 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Market Data Agent - Business Metrics",
+    "tags": ["market-data", "business", "kpi"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "1m",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Daily Trading Volume",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(increase(market_data_volume_bytes_total[24h]))",
+            "legendFormat": "Total Volume (24h)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "unit": "bytes"
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Active Trading Sessions",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(market_data_trading_sessions_active)",
+            "legendFormat": "Active Sessions"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Price Updates/Hour",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+        "targets": [
+          {
+            "expr": "rate(market_data_price_updates_total[1h]) * 3600",
+            "legendFormat": "Updates/Hour"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Symbol Coverage by Asset Type",
+        "type": "piechart",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "sum by (asset_type) (market_data_symbol_coverage_total)",
+            "legendFormat": "{{asset_type}}"
+          }
+        ],
+        "options": {
+          "pieType": "pie",
+          "tooltip": { "mode": "single" },
+          "legend": { "displayMode": "table", "placement": "right" }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Data Volume by Source",
+        "type": "barchart",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 8 },
+        "targets": [
+          {
+            "expr": "sum by (source) (rate(market_data_volume_bytes_total[1h]))",
+            "legendFormat": "{{source}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "Bps"
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Price Anomaly Detection",
+        "type": "heatmap",
+        "gridPos": { "h": 10, "w": 24, "x": 0, "y": 18 },
+        "targets": [
+          {
+            "expr": "market_data_price_anomaly_score",
+            "legendFormat": "{{symbol}}"
+          }
+        ],
+        "heatmap": {
+          "yAxis": { "min": 0, "max": 1 },
+          "colorMode": "spectrum"
+        }
+      },
+      {
+        "id": 7,
+        "title": "Market Session Activity",
+        "type": "graph",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 28 },
+        "targets": [
+          {
+            "expr": "market_data_trading_sessions_active",
+            "legendFormat": "{{market}} - {{session_type}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Active Sessions", "min": 0 }
+        ],
+        "xAxis": {
+          "mode": "time",
+          "buckets": null
+        }
+      },
+      {
+        "id": 8,
+        "title": "Data Freshness Lag",
+        "type": "graph",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 28 },
+        "targets": [
+          {
+            "expr": "time() - market_data_last_update_timestamp",
+            "legendFormat": "{{source}} - {{symbol}}"
+          }
+        ],
+        "yAxes": [
+          { "label": "Lag (seconds)", "min": 0 }
+        ],
+        "thresholds": [
+          { "value": 60, "colorMode": "critical", "op": "gt" }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Top Symbols by Update Frequency",
+        "type": "table",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 38 },
+        "targets": [
+          {
+            "expr": "topk(10, rate(market_data_price_updates_total[1h]))",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {},
+              "renameByName": {
+                "symbol": "Symbol",
+                "source": "Source",
+                "Value": "Updates/Hour"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Data Quality Violations",
+        "type": "table",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 38 },
+        "targets": [
+          {
+            "expr": "topk(10, rate(market_data_quality_violations_total[1h]))",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "symbol": "Symbol",
+                "source": "Source",
+                "violation_type": "Violation Type",
+                "severity": "Severity",
+                "Value": "Violations/Hour"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

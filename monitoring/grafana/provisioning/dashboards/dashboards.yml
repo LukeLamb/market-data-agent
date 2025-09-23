@@ -1,0 +1,38 @@
+# Grafana Dashboard Provisioning
+# Phase 4 Step 2: Enterprise Monitoring & Observability
+
+apiVersion: 1
+
+providers:
+  - name: 'market-data-dashboards'
+    orgId: 1
+    folder: 'Market Data Agent'
+    folderUid: 'market-data'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+
+  - name: 'infrastructure-dashboards'
+    orgId: 1
+    folder: 'Infrastructure'
+    folderUid: 'infrastructure'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/infrastructure
+
+  - name: 'business-dashboards'
+    orgId: 1
+    folder: 'Business Metrics'
+    folderUid: 'business'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/business

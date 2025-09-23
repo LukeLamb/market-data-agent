@@ -1,0 +1,221 @@
+# Prometheus Alert Rules for Market Data Agent
+# Phase 4 Step 2: Enterprise Monitoring & Observability
+
+groups:
+  - name: market-data-agent.rules
+    interval: 30s
+    rules:
+      # High-level service availability alerts
+      - alert: MarketDataAgentDown
+        expr: up{job="market-data-agent"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: market-data-agent
+        annotations:
+          summary: "Market Data Agent is down"
+          description: "Market Data Agent instance {{ $labels.instance }} has been down for more than 1 minute."
+          runbook_url: "https://docs.marketdata.com/runbooks/agent-down"
+
+      - alert: MarketDataAgentHighErrorRate
+        expr: rate(http_requests_total{job="market-data-agent",status=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          service: market-data-agent
+        annotations:
+          summary: "High error rate in Market Data Agent"
+          description: "Market Data Agent instance {{ $labels.instance }} has error rate of {{ $value }} errors per second."
+
+      - alert: MarketDataAgentHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="market-data-agent"}[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: market-data-agent
+        annotations:
+          summary: "High latency in Market Data Agent"
+          description: "Market Data Agent 95th percentile latency is {{ $value }}s on instance {{ $labels.instance }}."
+
+      # Data source alerts
+      - alert: DataSourceDown
+        expr: market_data_source_health{status!="healthy"} == 1
+        for: 2m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: data-source
+        annotations:
+          summary: "Data source {{ $labels.source }} is unhealthy"
+          description: "Data source {{ $labels.source }} has been unhealthy for more than 2 minutes. Status: {{ $labels.status }}"
+
+      - alert: DataSourceHighFailureRate
+        expr: rate(market_data_source_requests_failed_total[5m]) / rate(market_data_source_requests_total[5m]) > 0.2
+        for: 3m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: data-source
+        annotations:
+          summary: "High failure rate for data source {{ $labels.source }}"
+          description: "Data source {{ $labels.source }} has failure rate of {{ $value | humanizePercentage }}."
+
+      - alert: DataQualityLow
+        expr: market_data_quality_score < 0.7
+        for: 5m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: data-quality
+        annotations:
+          summary: "Low data quality score for {{ $labels.symbol }}"
+          description: "Data quality score for {{ $labels.symbol }} from {{ $labels.source }} is {{ $value }}."
+
+      # Cache performance alerts
+      - alert: CacheHitRateLow
+        expr: rate(market_data_cache_hits_total[5m]) / (rate(market_data_cache_hits_total[5m]) + rate(market_data_cache_misses_total[5m])) < 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: cache
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate is {{ $value | humanizePercentage }} which is below the 80% threshold."
+
+      - alert: CacheMemoryHigh
+        expr: market_data_cache_memory_usage_bytes / market_data_cache_memory_limit_bytes > 0.9
+        for: 2m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: cache
+        annotations:
+          summary: "High cache memory usage"
+          description: "Cache memory usage is {{ $value | humanizePercentage }} of limit."
+
+      # Database alerts
+      - alert: DatabaseConnectionsHigh
+        expr: market_data_db_connections_active / market_data_db_connections_max > 0.8
+        for: 3m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: database
+        annotations:
+          summary: "High database connection usage"
+          description: "Database connection usage is {{ $value | humanizePercentage }} of maximum."
+
+      - alert: DatabaseQuerySlowdown
+        expr: histogram_quantile(0.95, rate(market_data_db_query_duration_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: database
+        annotations:
+          summary: "Slow database queries detected"
+          description: "95th percentile database query time is {{ $value }}s."
+
+      # Resource utilization alerts
+      - alert: HighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total{pod=~"market-data-agent.*"}[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: resources
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}% on pod {{ $labels.pod }}."
+
+      - alert: HighMemoryUsage
+        expr: container_memory_usage_bytes{pod=~"market-data-agent.*"} / container_spec_memory_limit_bytes > 0.9
+        for: 3m
+        labels:
+          severity: critical
+          service: market-data-agent
+          component: resources
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | humanizePercentage }} on pod {{ $labels.pod }}."
+
+      - alert: PodRestartingFrequently
+        expr: increase(kube_pod_container_status_restarts_total{pod=~"market-data-agent.*"}[15m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: kubernetes
+        annotations:
+          summary: "Pod restarting frequently"
+          description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last 15 minutes."
+
+      # Business logic alerts
+      - alert: PriceAnomalyDetected
+        expr: market_data_price_anomaly_score > 0.9
+        for: 0m
+        labels:
+          severity: info
+          service: market-data-agent
+          component: anomaly-detection
+        annotations:
+          summary: "Price anomaly detected for {{ $labels.symbol }}"
+          description: "Anomaly score of {{ $value }} detected for {{ $labels.symbol }}. This may indicate unusual market activity."
+
+      - alert: DataFreshnessIssue
+        expr: time() - market_data_last_update_timestamp > 300
+        for: 1m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: data-freshness
+        annotations:
+          summary: "Stale data detected for {{ $labels.symbol }}"
+          description: "Last update for {{ $labels.symbol }} was {{ $value }}s ago."
+
+      - alert: RateLimitApproaching
+        expr: market_data_rate_limit_usage_ratio > 0.8
+        for: 2m
+        labels:
+          severity: warning
+          service: market-data-agent
+          component: rate-limiting
+        annotations:
+          summary: "Rate limit approaching for {{ $labels.source }}"
+          description: "Rate limit usage is {{ $value | humanizePercentage }} for {{ $labels.source }}."
+
+  - name: infrastructure.rules
+    interval: 30s
+    rules:
+      # Kubernetes cluster health
+      - alert: KubernetesNodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: kubernetes
+        annotations:
+          summary: "Kubernetes node not ready"
+          description: "Node {{ $labels.node }} has been not ready for more than 2 minutes."
+
+      - alert: KubernetesPodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: kubernetes
+        annotations:
+          summary: "Pod {{ $labels.pod }} is crash looping"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is restarting frequently."
+
+      # Storage alerts
+      - alert: PersistentVolumeUsageHigh
+        expr: kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "High persistent volume usage"
+          description: "PV {{ $labels.persistentvolumeclaim }} usage is {{ $value | humanizePercentage }}."
