@@ -1,0 +1,39 @@
+# Main Ansible Playbook for Market Data Agent Infrastructure
+# Phase 4 Step 3: Configuration Management & Environment Automation
+
+- name: Configure all infrastructure components
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  pre_tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Update package cache (RedHat)
+      yum:
+        update_cache: yes
+      when: ansible_os_family == "RedHat"
+
+  roles:
+    - common
+    - security
+    - monitoring
+
+- name: Configure Kubernetes infrastructure
+  import_playbook: kubernetes.yml
+
+- name: Configure monitoring infrastructure
+  import_playbook: monitoring.yml
+
+- name: Configure database infrastructure
+  import_playbook: database.yml
+
+- name: Configure application deployment
+  import_playbook: application.yml
+
+- name: Validate configuration
+  import_playbook: validation.yml

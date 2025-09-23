@@ -1,0 +1,254 @@
+# Vault Helm Chart Values for Market Data Agent
+# Phase 4 Step 3: Configuration Management & Environment Automation
+
+global:
+  enabled: true
+  tlsDisable: false
+  imagePullSecrets: []
+
+injector:
+  enabled: true
+  replicas: 2
+
+  image:
+    repository: "hashicorp/vault-k8s"
+    tag: "1.4.1"
+    pullPolicy: IfNotPresent
+
+  # Resource requests and limits
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  # Environment variables
+  env:
+    AGENT_INJECT_VAULT_ADDR: https://vault.vault.svc.cluster.local:8200
+    AGENT_INJECT_VAULT_AUTH_PATH: auth/kubernetes
+    AGENT_INJECT_VAULT_IMAGE: hashicorp/vault:1.15.2
+    AGENT_INJECT_TLS_AUTO: vault-injector-tls
+    AGENT_INJECT_TLS_AUTO_HOSTS: vault-agent-injector-svc,vault-agent-injector-svc.vault,vault-agent-injector-svc.vault.svc
+
+  # Service configuration
+  service:
+    name: vault-agent-injector-svc
+
+  # Webhook configuration
+  webhook:
+    annotations: {}
+
+  # Pod security context
+  securityContext:
+    pod:
+      runAsNonRoot: true
+      runAsGroup: 1000
+      runAsUser: 100
+      fsGroup: 1000
+    container:
+      allowPrivilegeEscalation: false
+
+server:
+  enabled: true
+  image:
+    repository: "hashicorp/vault"
+    tag: "1.15.2"
+    pullPolicy: IfNotPresent
+
+  # Update strategy
+  updateStrategyType: "RollingUpdate"
+
+  # Log level and format
+  logLevel: "info"
+  logFormat: "json"
+
+  # Resource requests and limits
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  # Read and liveness probes
+  readinessProbe:
+    enabled: true
+    path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+  livenessProbe:
+    enabled: true
+    path: "/v1/sys/health?standbyok=true"
+    initialDelaySeconds: 60
+
+  # High availability configuration
+  ha:
+    enabled: true
+    replicas: 3
+
+    # Raft storage configuration
+    raft:
+      enabled: true
+      setNodeId: true
+
+      config: |
+        ui = true
+
+        listener "tcp" {
+          tls_disable = 0
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_cert_file = "/vault/userconfig/vault-tls/vault.crt"
+          tls_key_file  = "/vault/userconfig/vault-tls/vault.key"
+          tls_client_ca_file = "/vault/userconfig/vault-tls/vault.ca"
+        }
+
+        storage "raft" {
+          path = "/vault/data"
+
+          retry_join {
+            leader_api_addr = "https://vault-0.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/vault.ca"
+            leader_client_cert_file = "/vault/userconfig/vault-tls/vault.crt"
+            leader_client_key_file = "/vault/userconfig/vault-tls/vault.key"
+          }
+
+          retry_join {
+            leader_api_addr = "https://vault-1.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/vault.ca"
+            leader_client_cert_file = "/vault/userconfig/vault-tls/vault.crt"
+            leader_client_key_file = "/vault/userconfig/vault-tls/vault.key"
+          }
+
+          retry_join {
+            leader_api_addr = "https://vault-2.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/vault.ca"
+            leader_client_cert_file = "/vault/userconfig/vault-tls/vault.crt"
+            leader_client_key_file = "/vault/userconfig/vault-tls/vault.key"
+          }
+
+          autopilot {
+            cleanup_dead_servers = "true"
+            last_contact_threshold = "200ms"
+            last_contact_failure_threshold = "10m"
+            max_trailing_logs = 250000
+            min_quorum = 3
+            server_stabilization_time = "10s"
+          }
+        }
+
+        service_registration "kubernetes" {}
+
+        # AWS KMS seal (uncomment for production)
+        # seal "awskms" {
+        #   region     = "us-west-2"
+        #   kms_key_id = "alias/vault-seal-key"
+        # }
+
+  # Service configuration
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 8200
+    targetPort: 8200
+    annotations: {}
+
+  # Data storage
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    mountPath: "/vault/data"
+    storageClass: null
+    accessMode: ReadWriteOnce
+    annotations: {}
+
+  # Audit storage
+  auditStorage:
+    enabled: true
+    size: 10Gi
+    mountPath: "/vault/audit"
+    storageClass: null
+    accessMode: ReadWriteOnce
+    annotations: {}
+
+  # Pod security context
+  securityContext:
+    pod:
+      runAsNonRoot: true
+      runAsGroup: 1000
+      runAsUser: 100
+      fsGroup: 1000
+    container:
+      allowPrivilegeEscalation: false
+
+  # Node selector
+  nodeSelector: {}
+
+  # Tolerations
+  tolerations: []
+
+  # Affinity rules
+  affinity: |
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ template "vault.name" . }}
+              app.kubernetes.io/instance: "{{ .Release.Name }}"
+              component: server
+          topologyKey: kubernetes.io/hostname
+
+  # Volumes and volume mounts
+  volumes:
+    - name: vault-tls
+      secret:
+        secretName: vault-tls
+
+  volumeMounts:
+    - name: vault-tls
+      mountPath: /vault/userconfig/vault-tls
+      readOnly: true
+
+  # Environment variables
+  extraEnvironmentVars:
+    VAULT_CACERT: /vault/userconfig/vault-tls/vault.ca
+    VAULT_TLSCERT: /vault/userconfig/vault-tls/vault.crt
+    VAULT_TLSKEY: /vault/userconfig/vault-tls/vault.key
+
+  # Additional containers
+  extraContainers: []
+
+  # Monitoring
+  serviceMonitor:
+    enabled: true
+    selectors: {}
+    interval: 30s
+    scrapeTimeout: 10s
+
+# UI configuration
+ui:
+  enabled: true
+  serviceType: "ClusterIP"
+  externalPort: 8200
+
+  # Ingress configuration
+  ingress:
+    enabled: false
+    annotations: {}
+    hosts:
+      - host: vault.example.com
+        paths: []
+    tls: []
+
+# CSI provider
+csi:
+  enabled: false
+
+# Server monitor
+serverTelemetry:
+  serviceMonitor:
+    enabled: true
+    selectors: {}
+    interval: 30s
+    scrapeTimeout: 10s

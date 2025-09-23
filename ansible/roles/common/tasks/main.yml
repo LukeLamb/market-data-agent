@@ -1,0 +1,217 @@
+# Common System Configuration Tasks
+# Phase 4 Step 3: Configuration Management & Environment Automation
+
+- name: Set hostname
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Update /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    line: "{{ ansible_default_ipv4.address }} {{ inventory_hostname }}"
+    state: present
+
+- name: Install common packages
+  package:
+    name: "{{ common_packages }}"
+    state: present
+
+- name: Create project directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  loop:
+    - /opt/market-data
+    - /var/log/market-data
+    - /etc/market-data
+    - /var/lib/market-data
+
+- name: Configure timezone
+  timezone:
+    name: UTC
+
+- name: Configure NTP
+  template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+    backup: yes
+  notify: restart chrony
+
+- name: Start and enable chrony
+  systemd:
+    name: chrony
+    state: started
+    enabled: yes
+
+- name: Configure sysctl parameters
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  loop:
+    - name: vm.swappiness
+      value: 1
+    - name: net.core.somaxconn
+      value: 65535
+    - name: net.ipv4.tcp_max_syn_backlog
+      value: 65535
+    - name: net.core.netdev_max_backlog
+      value: 5000
+    - name: net.ipv4.tcp_fin_timeout
+      value: 30
+    - name: fs.file-max
+      value: 2097152
+
+- name: Configure limits
+  pam_limits:
+    domain: "{{ item.domain }}"
+    limit_type: "{{ item.type }}"
+    limit_item: "{{ item.item }}"
+    value: "{{ item.value }}"
+  loop:
+    - domain: '*'
+      type: soft
+      item: nofile
+      value: 65536
+    - domain: '*'
+      type: hard
+      item: nofile
+      value: 65536
+    - domain: '*'
+      type: soft
+      item: nproc
+      value: 32768
+    - domain: '*'
+      type: hard
+      item: nproc
+      value: 32768
+
+- name: Configure rsyslog
+  template:
+    src: rsyslog.conf.j2
+    dest: /etc/rsyslog.conf
+    backup: yes
+  notify: restart rsyslog
+
+- name: Configure logrotate
+  template:
+    src: market-data-logrotate.j2
+    dest: /etc/logrotate.d/market-data
+    mode: '0644'
+
+- name: Install Docker
+  block:
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install Docker
+      package:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Add users to docker group
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: yes
+      loop: "{{ docker_users }}"
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+- name: Configure Docker daemon
+  template:
+    src: docker-daemon.json.j2
+    dest: /etc/docker/daemon.json
+    backup: yes
+  notify: restart docker
+
+- name: Install AWS CLI
+  pip:
+    name: awscli
+    state: present
+
+- name: Install kubectl
+  get_url:
+    url: "https://dl.k8s.io/release/v{{ kubernetes_version }}/bin/linux/amd64/kubectl"
+    dest: /usr/local/bin/kubectl
+    mode: '0755'
+
+- name: Install Helm
+  unarchive:
+    src: "https://get.helm.sh/helm-v3.12.0-linux-amd64.tar.gz"
+    dest: /tmp
+    remote_src: yes
+  notify: move helm binary
+
+- name: Create system users
+  user:
+    name: "{{ item.name }}"
+    system: yes
+    shell: /bin/false
+    home: "{{ item.home | default('/var/lib/' + item.name) }}"
+    create_home: yes
+  loop:
+    - name: market-data
+      home: /var/lib/market-data
+    - name: prometheus
+      home: /var/lib/prometheus
+
+- name: Configure environment variables
+  template:
+    src: environment.j2
+    dest: /etc/environment
+    backup: yes
+
+- name: Install monitoring agent
+  get_url:
+    url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+    dest: /tmp/node_exporter.tar.gz
+
+- name: Extract monitoring agent
+  unarchive:
+    src: /tmp/node_exporter.tar.gz
+    dest: /tmp
+    remote_src: yes
+
+- name: Install node exporter
+  copy:
+    src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+    dest: /usr/local/bin/node_exporter
+    mode: '0755'
+    remote_src: yes
+
+- name: Create node exporter systemd service
+  template:
+    src: node_exporter.service.j2
+    dest: /etc/systemd/system/node_exporter.service
+  notify:
+    - reload systemd
+    - restart node_exporter
+
+- name: Start and enable node exporter
+  systemd:
+    name: node_exporter
+    state: started
+    enabled: yes
+    daemon_reload: yes

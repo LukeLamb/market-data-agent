@@ -1,0 +1,251 @@
+# Kubernetes Infrastructure Configuration Playbook
+# Phase 4 Step 3: Configuration Management & Environment Automation
+
+- name: Configure Kubernetes master nodes
+  hosts: kubernetes_*:&node_role_master
+  become: yes
+  serial: 1
+
+  vars:
+    kubernetes_role: master
+
+  roles:
+    - kubernetes-common
+    - kubernetes-master
+
+  post_tasks:
+    - name: Wait for Kubernetes API to be ready
+      uri:
+        url: "https://{{ ansible_default_ipv4.address }}:6443/healthz"
+        validate_certs: no
+        status_code: 200
+      retries: 30
+      delay: 10
+
+- name: Configure Kubernetes worker nodes
+  hosts: kubernetes_*:&node_role_worker
+  become: yes
+
+  vars:
+    kubernetes_role: worker
+
+  roles:
+    - kubernetes-common
+    - kubernetes-worker
+
+- name: Configure cluster networking
+  hosts: kubernetes_*:&node_role_master[0]
+  become: yes
+
+  tasks:
+    - name: Install Calico CNI
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: calico-system
+
+    - name: Apply Calico manifest
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../files/calico.yaml"
+
+- name: Configure cluster monitoring
+  hosts: kubernetes_*:&node_role_master[0]
+  become: yes
+
+  tasks:
+    - name: Create monitoring namespace
+      kubernetes.core.k8s:
+        name: monitoring
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Deploy Prometheus Operator
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../files/prometheus-operator.yaml"
+
+- name: Configure storage classes
+  hosts: kubernetes_*:&node_role_master[0]
+  become: yes
+
+  tasks:
+    - name: Create storage classes
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ item.name }}"
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "{{ item.default | default('false') }}"
+          provisioner: "{{ item.provisioner }}"
+          parameters: "{{ item.parameters | default({}) }}"
+          reclaimPolicy: "{{ item.reclaim_policy | default('Delete') }}"
+          allowVolumeExpansion: "{{ item.allow_expansion | default(true) }}"
+      loop:
+        - name: fast-ssd
+          provisioner: kubernetes.io/aws-ebs
+          parameters:
+            type: gp3
+            iops: "3000"
+            throughput: "125"
+          default: true
+        - name: slow-hdd
+          provisioner: kubernetes.io/aws-ebs
+          parameters:
+            type: sc1
+          reclaim_policy: Retain
+
+- name: Configure RBAC
+  hosts: kubernetes_*:&node_role_master[0]
+  become: yes
+
+  tasks:
+    - name: Create service accounts
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: "{{ item.name }}"
+            namespace: "{{ item.namespace }}"
+          automountServiceAccountToken: "{{ item.automount | default(true) }}"
+      loop:
+        - name: market-data-agent
+          namespace: market-data
+        - name: monitoring-agent
+          namespace: monitoring
+        - name: vault-agent
+          namespace: vault
+
+    - name: Create cluster roles
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../files/rbac/{{ item }}.yaml"
+      loop:
+        - market-data-agent-role
+        - monitoring-agent-role
+        - vault-agent-role
+
+- name: Configure network policies
+  hosts: kubernetes_*:&node_role_master[0]
+  become: yes
+
+  tasks:
+    - name: Apply network policies
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: "{{ item.name }}"
+            namespace: "{{ item.namespace }}"
+          spec:
+            podSelector: "{{ item.pod_selector | default({}) }}"
+            policyTypes: "{{ item.policy_types }}"
+            ingress: "{{ item.ingress | default([]) }}"
+            egress: "{{ item.egress | default([]) }}"
+      loop:
+        - name: market-data-ingress
+          namespace: market-data
+          policy_types: ["Ingress"]
+          ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    name: monitoring
+              ports:
+              - protocol: TCP
+                port: 8080
+        - name: monitoring-egress
+          namespace: monitoring
+          policy_types: ["Egress"]
+          egress:
+            - to: []
+              ports:
+              - protocol: TCP
+                port: 53
+              - protocol: UDP
+                port: 53
+
+- name: Configure pod security policies
+  hosts: kubernetes_*:&node_role_master[0]
+  become: yes
+
+  tasks:
+    - name: Create pod security policies
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: policy/v1beta1
+          kind: PodSecurityPolicy
+          metadata:
+            name: "{{ item.name }}"
+          spec:
+            privileged: "{{ item.privileged | default(false) }}"
+            allowPrivilegeEscalation: "{{ item.allow_privilege_escalation | default(false) }}"
+            requiredDropCapabilities: "{{ item.required_drop_capabilities | default(['ALL']) }}"
+            volumes: "{{ item.volumes | default(['configMap', 'emptyDir', 'projected', 'secret', 'downwardAPI', 'persistentVolumeClaim']) }}"
+            runAsUser:
+              rule: "{{ item.run_as_user_rule | default('MustRunAsNonRoot') }}"
+            seLinux:
+              rule: RunAsAny
+            fsGroup:
+              rule: RunAsAny
+      loop:
+        - name: market-data-psp
+          privileged: false
+          allow_privilege_escalation: false
+        - name: monitoring-psp
+          privileged: false
+          allow_privilege_escalation: false
+          volumes:
+            - configMap
+            - emptyDir
+            - projected
+            - secret
+            - downwardAPI
+            - persistentVolumeClaim
+            - hostPath
+
+- name: Configure resource quotas
+  hosts: kubernetes_*:&node_role_master[0]
+  become: yes
+
+  tasks:
+    - name: Create resource quotas
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: "{{ item.namespace }}-quota"
+            namespace: "{{ item.namespace }}"
+          spec:
+            hard: "{{ item.limits }}"
+      loop:
+        - namespace: market-data
+          limits:
+            requests.cpu: "4"
+            requests.memory: 8Gi
+            limits.cpu: "8"
+            limits.memory: 16Gi
+            persistentvolumeclaims: "10"
+            services: "10"
+        - namespace: monitoring
+          limits:
+            requests.cpu: "2"
+            requests.memory: 4Gi
+            limits.cpu: "4"
+            limits.memory: 8Gi
+            persistentvolumeclaims: "20"
+            services: "15"
