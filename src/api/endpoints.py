@@ -511,7 +511,7 @@ async def get_supported_symbols(
         for source_name, source in manager.sources.items():
             if manager._is_source_available(source_name):
                 try:
-                    symbols = await source.get_supported_symbols()
+                    symbols = source.get_supported_symbols()
                     source_symbols[source_name] = len(symbols)
                     all_symbols.update(symbols)
                 except Exception as e:
@@ -783,7 +783,7 @@ async def comprehensive_health_check(
 # Monitoring and Alerting Endpoints
 
 @app.get("/monitoring/dashboard/{layout_name}")
-async def get_monitoring_dashboard(
+async def get_dashboard_layout(
     layout_name: str = Path(..., description="Dashboard layout name (overview, performance, alerts)"),
     dashboard: MonitoringDashboard = Depends(get_monitoring_dashboard)
 ):
@@ -850,7 +850,31 @@ async def get_metric_details(
 
         # Get current value
         current_metrics = metrics_collector.get_current_metrics()
-        current_value = current_metrics.get(metric_name)
+
+        # Search for the metric across all sections (counters, gauges, timers, etc.)
+        current_value = None
+        metric_type = None
+
+        # Check in counters
+        if 'counters' in current_metrics and metric_name in current_metrics['counters']:
+            current_value = current_metrics['counters'][metric_name]
+            metric_type = 'counter'
+        # Check in gauges
+        elif 'gauges' in current_metrics and metric_name in current_metrics['gauges']:
+            current_value = current_metrics['gauges'][metric_name]
+            metric_type = 'gauge'
+        # Check in timers
+        elif 'timers' in current_metrics and metric_name in current_metrics['timers']:
+            current_value = current_metrics['timers'][metric_name]
+            metric_type = 'timer'
+        # Check in histograms
+        elif 'histograms' in current_metrics and metric_name in current_metrics['histograms']:
+            current_value = current_metrics['histograms'][metric_name]
+            metric_type = 'histogram'
+        # Check in rates
+        elif 'rates' in current_metrics and metric_name in current_metrics['rates']:
+            current_value = current_metrics['rates'][metric_name]
+            metric_type = 'rate'
 
         if current_value is None:
             raise HTTPException(status_code=404, detail=f"Metric '{metric_name}' not found")
@@ -858,8 +882,9 @@ async def get_metric_details(
         response = {
             "success": True,
             "metric_name": metric_name,
+            "metric_type": metric_type,
             "current_value": current_value,
-            "summary": metrics_collector.get_summary(metric_name).__dict__
+            "timestamp": datetime.now().isoformat()
         }
 
         if include_history:
@@ -925,7 +950,7 @@ async def get_system_status(
         record_counter('monitoring_system_status_requests')
 
         with time_operation('system_status_generation_time'):
-            system_status = dashboard.get_system_status()
+            system_status = await dashboard.get_system_status()
 
         return {
             "success": True,

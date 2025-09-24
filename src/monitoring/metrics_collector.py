@@ -676,6 +676,17 @@ class MetricsCollector:
         estimated_bytes = total_values * 100 + 1024 * 1024  # 1MB overhead
         return estimated_bytes / (1024 * 1024)  # Convert to MB
 
+    def check_alerts(self) -> List[Alert]:
+        """Check and return active alerts as Alert objects
+
+        Returns:
+            List of active Alert objects
+        """
+        return [
+            alert for alert in self.active_alerts.values()
+            if not alert.resolved
+        ]
+
     def get_active_alerts(self) -> List[Dict[str, Any]]:
         """Get all active alerts
 

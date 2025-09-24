@@ -49,6 +49,16 @@ class NoHealthySourceError(SourceManagerError):
     pass
 
 
+class SourceNotFoundError(SourceManagerError):
+    """Raised when a requested source is not registered"""
+    pass
+
+
+class SourceNotAvailableError(SourceManagerError):
+    """Raised when a requested source is not available"""
+    pass
+
+
 class DataSourceManager:
     """Manages multiple data sources with intelligent failover
 
@@ -258,6 +268,72 @@ class DataSourceManager:
             raise last_error
         else:
             raise NoHealthySourceError("No healthy data sources available")
+
+    async def get_current_price_from_source(self, symbol: str, source_name: str) -> CurrentPrice:
+        """Get current price from a specific data source
+
+        Args:
+            symbol: Stock symbol to fetch
+            source_name: Name of the specific source to use
+
+        Returns:
+            CurrentPrice object from the specified source
+
+        Raises:
+            SourceNotFoundError: If the specified source is not registered
+            SourceNotAvailableError: If the specified source is not available
+            SymbolNotFoundError: If symbol is not found in the source
+        """
+        if source_name not in self.sources:
+            raise SourceNotFoundError(f"Data source '{source_name}' not registered")
+
+        if not self._is_source_available(source_name):
+            raise SourceNotAvailableError(f"Data source '{source_name}' is not available")
+
+        try:
+            # Use enhanced circuit breaker to execute the request
+            circuit_breaker = self.circuit_breaker_manager.get_circuit_breaker(source_name)
+            source = self.sources[source_name]
+
+            async def fetch_price():
+                return await source.get_current_price(symbol)
+
+            price = await circuit_breaker.call(fetch_price)
+
+            # Validate if enabled
+            if self.validation_enabled:
+                validation_result = self.validator.validate_current_price(price)
+                if not validation_result.is_valid:
+                    logger.warning(f"Invalid price data from {source_name}: {validation_result.issues}")
+                    # Treat validation failure as a recoverable error
+                    raise DataSourceError(f"Data validation failed: {validation_result.issues}")
+
+                # Update quality score from validation
+                price.quality_score = validation_result.quality_score
+
+            # Update source reliability on success
+            self._update_source_reliability(source_name, True)
+            self._reset_circuit_breaker(source_name)
+
+            logger.debug(f"Successfully fetched current price for {symbol} from {source_name}")
+            return price
+
+        except SymbolNotFoundError:
+            logger.debug(f"Symbol {symbol} not found in {source_name}")
+            raise
+
+        except Exception as e:
+            # Enhanced circuit breaker will have already recorded this failure
+            logger.warning(f"Failed to get current price from {source_name}: {e}")
+
+            # Update legacy systems for compatibility
+            self._update_source_reliability(source_name, False)
+
+            # For symbol not found errors, don't penalize the circuit breaker
+            if not isinstance(e, SymbolNotFoundError):
+                self._update_circuit_breaker(source_name, e)
+
+            raise
 
     async def get_historical_data(
         self,

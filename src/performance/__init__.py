@@ -103,9 +103,50 @@ def batch_request(operation: str, data: dict):
     """Add request to default batch processor."""
     return get_default_batcher().add_request(operation, data)
 
-def start_profiling(operation_name: str):
-    """Start profiling an operation."""
-    return get_default_profiler().start_operation(operation_name)
+def start_profiling(operation_name: str, metadata: dict = None):
+    """Start profiling an operation with context manager support."""
+    from .performance_profiler import OperationProfiler
+    return OperationProfiler(get_default_profiler(), operation_name, metadata)
+
+# Startup and shutdown functions
+async def start_performance_components():
+    """Initialize all performance optimization components"""
+    # Initialize default instances
+    get_default_cache()
+    get_default_batcher()
+    get_default_profiler()
+    get_default_optimizer()
+
+async def stop_performance_components():
+    """Shutdown all performance optimization components"""
+    global _default_cache, _default_batcher, _default_profiler, _default_optimizer
+
+    # Clean up default instances
+    if _default_cache:
+        # Clear cache if it has a clear method
+        if hasattr(_default_cache, 'clear'):
+            _default_cache.clear()
+
+    if _default_batcher:
+        # Stop batch processor if it has a stop method
+        if hasattr(_default_batcher, 'stop'):
+            await _default_batcher.stop()
+
+    if _default_profiler:
+        # Stop profiler if it has a stop method
+        if hasattr(_default_profiler, 'stop'):
+            _default_profiler.stop()
+
+    if _default_optimizer:
+        # Close connections if it has a close method
+        if hasattr(_default_optimizer, 'close'):
+            await _default_optimizer.close()
+
+    # Reset globals
+    _default_cache = None
+    _default_batcher = None
+    _default_profiler = None
+    _default_optimizer = None
 
 __all__ = [
     # Main classes
@@ -142,5 +183,9 @@ __all__ = [
     'cache_get',
     'cache_set',
     'batch_request',
-    'start_profiling'
+    'start_profiling',
+
+    # Startup/shutdown
+    'start_performance_components',
+    'stop_performance_components'
 ]

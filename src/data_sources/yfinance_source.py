@@ -75,8 +75,8 @@ class YFinanceSource(BaseDataSource):
 
             # Get current price using fast_info (most efficient)
             try:
-                info = ticker.fast_info
-                current_price = info.get('lastPrice')
+                fast_info = ticker.fast_info
+                current_price = fast_info.get('lastPrice')
 
                 if current_price is None or current_price <= 0:
                     # Fallback to regular info
@@ -86,10 +86,19 @@ class YFinanceSource(BaseDataSource):
                 if current_price is None or current_price <= 0:
                     raise SymbolNotFoundError(f"No price data available for symbol {symbol}")
 
+                # Always get full info for volume/bid/ask data
+                info = ticker.info
+
                 # Get additional data if available
-                volume = info.get('regularMarketVolume')
-                bid = info.get('bid')
-                ask = info.get('ask')
+                volume = (info.get('regularMarketVolume') or
+                         info.get('volume') or
+                         fast_info.get('regularMarketVolume'))
+
+                bid = (info.get('bid') or
+                      info.get('regularMarketBid'))
+
+                ask = (info.get('ask') or
+                      info.get('regularMarketAsk'))
 
                 self._record_request()
                 self.reset_error_count()

@@ -703,9 +703,53 @@ class ValidationEngine:
             "circuit_breaker_active": self.circuit_breaker_active,
             "emergency_mode": self.emergency_mode,
             "configuration": {
-                "mode": self.config.mode.value,
+                "mode": str(self.config.mode),
                 "max_time_ms": self.config.max_validation_time_ms,
                 "confidence_threshold": self.config.confidence_threshold,
                 "quality_threshold": self.config.quality_score_threshold
+            }
+        }
+
+    async def get_health_status(self) -> Dict[str, Any]:
+        """Get validation engine health status"""
+        performance_data = self.get_performance_summary()
+
+        # Determine overall health based on performance metrics
+        if "error" in performance_data:
+            overall_health = "unknown"
+            status = "No validation data available"
+        elif self.circuit_breaker_active:
+            overall_health = "degraded"
+            status = "Circuit breaker active due to performance issues"
+        elif self.emergency_mode:
+            overall_health = "emergency"
+            status = "Emergency mode activated"
+        elif performance_data.get("recent_acceptance_rate", 0) < 0.5:
+            overall_health = "degraded"
+            status = "Low data acceptance rate"
+        elif performance_data.get("recent_average_processing_time_ms", 0) > self.config.max_validation_time_ms * 2:
+            overall_health = "degraded"
+            status = "High processing times detected"
+        else:
+            overall_health = "healthy"
+            status = "All validation systems operational"
+
+        return {
+            "overall_health": overall_health,
+            "status": status,
+            "timestamp": datetime.now().isoformat(),
+            "validation_modes": {
+                "statistical": {"enabled": True, "active": not self.circuit_breaker_active},
+                "real_time": {"enabled": True, "active": not self.emergency_mode},
+                "cross_source": {"enabled": True, "active": not self.circuit_breaker_active},
+                "emergency": {"enabled": True, "active": self.emergency_mode}
+            },
+            "metrics": {
+                "total_validations": performance_data.get("total_validations", 0),
+                "acceptance_rate": performance_data.get("recent_acceptance_rate", 0),
+                "average_confidence": performance_data.get("recent_average_confidence", 0),
+                "processing_time_ms": performance_data.get("recent_average_processing_time_ms", 0),
+                "circuit_breaker_active": self.circuit_breaker_active,
+                "emergency_mode": self.emergency_mode
             }
         }
