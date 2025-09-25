@@ -26,7 +26,11 @@
       "Bash(findstr:*)",
       "Bash(taskkill:*)",
       "Bash(pkill:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(netstat:*)",
+      "Bash(find:*)",
+      "mcp__gitkraken__git_status",
+      "mcp__gitkraken__git_add_or_commit"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -35,6 +39,7 @@
     "context7",
     "sequentialthinking",
     "time",
-    "playwright"
+    "playwright",
+    "alphavantage"
   ]
 }

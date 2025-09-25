@@ -22,9 +22,20 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-time"]
     },
+    "gitkraken": {
+      "command": "c:\\Users\\infob\\AppData\\Roaming\\Code\\User\\globalStorage\\eamodio.gitlens\\gk.exe",
+      "args": ["mcp", "--host=vscode", "--source=gitlens", "--scheme=vscode"]
+    },
     "playwright": {
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "alphavantage": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"],
+      "env": {
+        "MCP_FETCH_BASE_URL": "https://mcp.alphavantage.co/mcp?apikey=33ZRVJ15999ZL3EI"
+      }
     }
   }
 }
